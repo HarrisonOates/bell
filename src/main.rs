@@ -1,12 +1,18 @@
-use clap::Parser;
-use htn_plan_validation::{Diagnostic, Options, Profile, Report, Status, validate};
+use bell::{Diagnostic, Options, Profile, Report, Status, validate};
+use clap::{Parser, ValueEnum};
 use std::{
-    fs::File,
-    io::Read,
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::ExitCode,
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum InputFormat {
+    Hddl,
+    Panda,
+}
 
 #[derive(Parser)]
 #[command(
@@ -19,6 +25,20 @@ struct Args {
     domain: PathBuf,
     problem: PathBuf,
     plan: PathBuf,
+    #[arg(
+        long,
+        value_enum,
+        default_value = "hddl",
+        help = "Read HDDL 1.1 or adapt raw PANDA-format output"
+    )]
+    input_format: InputFormat,
+    #[arg(long, help = "Version 1 reconstruction map for raw PANDA input")]
+    source_map: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Atomically write the HDDL 1.1 plan after successful validation"
+    )]
+    plan_output: Option<PathBuf>,
     #[arg(long, help = "Emit a structured JSON report")]
     json: bool,
     #[arg(long,default_value="ipc2027",value_parser=["ipc2027","hddl-1.1"])]
@@ -64,6 +84,112 @@ fn read(path: &Path, limit: usize) -> Result<String, Diagnostic> {
         )
     })
 }
+fn publish(path: &Path, text: &str, inputs: &[&Path]) -> Result<(), Diagnostic> {
+    let io_error = |e| {
+        failure(
+            Status::InputError,
+            "plan_output",
+            format!("{}: {e}", path.display()),
+        )
+    };
+    if let Ok(destination) = path.canonicalize() {
+        for input in inputs {
+            if input.canonicalize().ok().as_ref() == Some(&destination) {
+                return Err(failure(
+                    Status::InputError,
+                    "plan_output",
+                    "output must differ from the input files".into(),
+                ));
+            }
+        }
+    }
+    let name = path.file_name().ok_or_else(|| {
+        failure(
+            Status::InputError,
+            "plan_output",
+            "output needs a file name".into(),
+        )
+    })?;
+    let temporary = path.with_file_name(format!(
+        ".{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)
+        .map_err(io_error)?;
+    let result = (|| {
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result.map_err(io_error)
+}
+
+fn run(args: &Args, options: &Options) -> Result<Report, Diagnostic> {
+    let started = Instant::now();
+    let domain = read(&args.domain, options.max_input_bytes)?;
+    let problem = read(&args.problem, options.max_input_bytes)?;
+    let input = read(&args.plan, options.max_input_bytes)?;
+    if args.source_map.is_some() && args.input_format != InputFormat::Panda {
+        return Err(failure(
+            Status::InputError,
+            "source_map",
+            "--source-map requires --input-format panda".into(),
+        ));
+    }
+    let mut work = 0;
+    let plan = if args.input_format == InputFormat::Panda {
+        let source_map = args
+            .source_map
+            .as_ref()
+            .map(|p| read(p, options.max_input_bytes))
+            .transpose()?;
+        let adapted =
+            bell::adapter::from_panda(&domain, &problem, &input, source_map.as_deref(), options)?;
+        work = adapted.work;
+        adapted.text
+    } else {
+        input
+    };
+    let mut remaining = options.clone();
+    remaining.max_work = remaining.max_work.saturating_sub(work);
+    remaining.timeout = remaining
+        .timeout
+        .map(|t| t.saturating_sub(started.elapsed()));
+    let mut report = validate(&domain, &problem, &plan, &remaining);
+    report.work += work;
+    if args.input_format == InputFormat::Panda {
+        for diagnostic in &mut report.diagnostics {
+            if let Some(location) = &mut diagnostic.location
+                && location.file == "plan"
+            {
+                location.file = "<adapted-plan>".into();
+            }
+        }
+    }
+    if report.status == Status::Valid
+        && let Some(path) = &args.plan_output
+    {
+        let mut inputs = vec![
+            args.domain.as_path(),
+            args.problem.as_path(),
+            args.plan.as_path(),
+        ];
+        if let Some(map) = &args.source_map {
+            inputs.push(map);
+        }
+        publish(path, &plan, &inputs)?;
+    }
+    Ok(report)
+}
+
 fn main() -> ExitCode {
     let args = Args::parse();
     let options = Options {
@@ -76,15 +202,8 @@ fn main() -> ExitCode {
         timeout: args.timeout.map(Duration::from_secs),
         max_input_bytes: args.max_input_bytes,
     };
-    let sources = (|| {
-        Ok::<_, Diagnostic>((
-            read(&args.domain, options.max_input_bytes)?,
-            read(&args.problem, options.max_input_bytes)?,
-            read(&args.plan, options.max_input_bytes)?,
-        ))
-    })();
-    let mut report = match sources {
-        Ok((d, p, s)) => validate(&d, &p, &s, &options),
+    let mut report = match run(&args, &options) {
+        Ok(report) => report,
         Err(e) => Report {
             schema_version: 1,
             validator_version: env!("CARGO_PKG_VERSION"),

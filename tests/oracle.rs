@@ -1,4 +1,4 @@
-use htn_plan_validation::{Options, Profile, Status, validate};
+use bell::{Options, Profile, Status, validate};
 
 fn permutations(values: &[usize]) -> Vec<Vec<usize>> {
     if values.is_empty() {

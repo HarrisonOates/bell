@@ -1,3 +1,4 @@
+pub mod adapter;
 mod budget;
 mod execution;
 mod hierarchy;

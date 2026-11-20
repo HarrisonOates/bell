@@ -1,4 +1,4 @@
-use htn_plan_validation::{Options, Profile, Report, Status, validate};
+use bell::{Options, Profile, Report, Status, validate};
 
 fn check(d: &str, p: &str, s: &str) -> Report {
     validate(
