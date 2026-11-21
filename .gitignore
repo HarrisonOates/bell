@@ -20,6 +20,14 @@ rustc-ice-*.txt
 __pycache__/
 *.pyc
 
+# LaTeX editor builds beside the checked-in note
+output/pdf/*.aux
+output/pdf/*.fdb_latexmk
+output/pdf/*.fls
+output/pdf/*.log
+output/pdf/*.out
+output/pdf/*.synctex.gz
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

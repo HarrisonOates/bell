@@ -1,0 +1,297 @@
+% Copyright 2026 Harrison Oates
+% SPDX-License-Identifier: Apache-2.0
+
+\documentclass[10pt,a4paper,twocolumn]{article}
+\usepackage[margin=0.72in,columnsep=0.25in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{newtxtext,newtxmath,microtype,amsmath}
+\usepackage{algorithm,algpseudocode}
+\usepackage[hidelinks]{hyperref}
+\usepackage{titlesec}
+\titleformat{\section}{\normalfont\bfseries\normalsize}{\thesection}{0.5em}{}
+\titlespacing*{\section}{0pt}{7pt plus 1pt minus 1pt}{3pt}
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0pt}
+\setlength{\textfloatsep}{7pt}
+\setlength{\intextsep}{7pt}
+\setlength{\abovedisplayskip}{4pt}
+\setlength{\belowdisplayskip}{4pt}
+\algrenewcommand\algorithmicindent{1em}
+\newcommand{\Lin}{\operatorname{Lin}}
+\newcommand{\pre}{\operatorname{pre}}
+\newcommand{\Valid}{\textsc{valid}}
+\newcommand{\Invalid}{\textsc{invalid}}
+\hypersetup{pdftitle={Exact Symbolic Validation of Partially Ordered HTN Plans},pdfauthor={Harrison Oates},pdfsubject={Bell: BDD reachability after decomposition verification}}
+\begin{document}
+\twocolumn[{
+\centering
+{\Large\bfseries Exact Symbolic Validation of\par Partially Ordered HTN Plans\par}
+\vspace{6pt}
+\begin{minipage}{0.94\textwidth}
+\small\textbf{Abstract.}
+We validate a supplied HTN decomposition and check that every action sequence permitted by its submitted ordering is executable. Method preconditions are tested by inserting effectless auxiliary steps. Binary decision diagrams represent reachable configurations after each primitive step. An order-enabled action that cannot execute is a counterexample, not a branch to discard. This gives an exact procedure for finite grounded Boolean inputs without enumerating linearizations or relying on an incomplete modal proof.
+\end{minipage}\vspace{8pt}
+}]
+
+\section{States, actions, and task networks}
+We use finite, ground HTN problems: action and method parameters have been replaced by objects, and quantified conditions are expanded over their finite domains. Let $F$ be the set of facts. A state $s\subseteq F$ lists exactly the facts currently true. Conditions are Boolean formulas over $F$, using conjunction $\land$, disjunction $\lor$, and negation $\neg$; $\top$ and $\bot$ denote true and false. We write $s\models\varphi$ when formula $\varphi$ is true in state $s$.
+
+An action $a$ has a precondition $\pre(a)$ and effects $(\chi,A,D)$: if guard $\chi$ holds, add the facts in $A\subseteq F$ and delete those in $D\subseteq F$. An unconditional effect has guard $\top$. Let $A_a(s)$ and $D_a(s)$ be the unions of the add and delete sets of all effects whose guards hold in $s$. Executing $a$ requires $s\models\pre(a)$ and produces
+\begin{equation}\label{eq:transition}
+ \gamma(a,s)=(s\setminus D_a(s))\cup A_a(s).
+\end{equation}
+Thus all guards read the state \emph{before} the action; effects apply together, with additions taking precedence over deletions. Here $\setminus$ removes facts and $\cup$ combines fact sets.
+
+A \emph{task network} $tn=(T,\prec,\alpha)$ comprises a finite set $T$ of task-occurrence identifiers, a strict partial order $\prec$, and a function $\alpha$ mapping each identifier to its task label~\cite{geier}. The statement $t\prec u$ means that $t$ must precede $u$; a strict partial order is transitive and never orders an occurrence before itself. Labels denote primitive tasks (actions) or compound tasks to be decomposed. A network is \emph{primitive} when all its tasks are primitive. Distinct identifiers allow the same action to occur twice. A \emph{linearization} contains each identifier once and respects $\prec$; $\Lin(tn)$ is the set of these sequences. A total order compares every pair of distinct identifiers and has exactly one linearization.
+
+A method $m=(c,\psi,tn_m)$ specifies a compound task name $c$, a method precondition $\psi$, and a network $tn_m$ of subtasks. Decomposition replaces an occurrence of $c$ by fresh occurrences of those subtasks, inheriting the replaced task's ordering constraints. The problem supplies the available actions and methods, an initial state $s_I$, an initial network $tn_I$, and a goal condition $g$ (equal to $\top$ if omitted).
+
+\section{The hierarchy and method-precondition checks}
+The input supplies a primitive network $tn$ and a \emph{decomposition certificate} $\mathcal D$: one finite tree per initial task, recording the method chosen at each compound node. Its roots must match $tn_I$; every compound node's children must match its method's network; and its primitive leaves must match $T$, each exactly once. Matching permits renaming identifiers but preserves labels and local order. Nodes cannot be shared or cyclic. The submitted order must include all orderings inherited through decomposition. These structural checks establish hierarchical derivability~\cite{behnke}.
+
+Method preconditions still depend on states, so structural checking alone cannot establish them. Following HDDL's compilation interpretation~\cite{hddl}, we insert \emph{auxiliary steps} into the action network. For each compound occurrence $v$, introduce a check $b_v$ with its chosen method's precondition and a completion marker $e_v$ with precondition $\top$. Both have no effects. The check precedes every subtask; the marker follows every subtask. They record when the method condition is tested and when its subtasks are complete. They carry no duration and are not counted as submitted actions.
+
+Formally, a primitive occurrence is its own entry and exit. A compound occurrence $v$ has entry $b_v$ and exit $e_v$. Put $b_v\prec_H e_v$; for each child, put its entry after $b_v$ and its exit before $e_v$. Translate a local order $u\prec w$ into $\mathrm{exit}(u)\prec_H\mathrm{entry}(w)$, including root orderings. Close these constraints transitively to obtain $H=(V,\prec_H,\alpha_H)$: $V$ contains the primitive occurrences and auxiliary steps; $\alpha_H$ assigns their actions, checks, or markers. Transitive closure adds implied constraints: $x\prec_H y$ and $y\prec_H z$ imply $x\prec_H z$. Required orderings between members of $T$ must be present in the submitted $\prec$. Empty methods retain their check and marker.
+
+\textbf{Example.} Suppose a method at $v$ requires \textit{ready} and has two ordered primitive subtasks $t_1,t_2$. Its expanded network is
+\[
+ \underbrace{b_v}_{\text{test \textit{ready}}}\ \longrightarrow\ t_1\ \longrightarrow\ t_2\ \longrightarrow\
+ \underbrace{e_v}_{\text{mark completion}}.
+\]
+Arrows mean precedence. If \textit{ready} holds initially and an unrelated action $d$ deletes it, the primitive order $(d,t_1,t_2)$ can still pass the method check through $(b_v,d,t_1,t_2,e_v)$, assuming the action preconditions hold. The method condition is tested once; it need not persist until $t_1$.
+
+For a sequence $\eta$ of steps from $H$, let $\eta|_T$ mean deleting all auxiliary steps, and let $\operatorname{Exec}(\eta)$ mean that every step is executable from $s_I$ in sequence and the final state satisfies $g$. After the structural checks, our validity requirement is
+\begin{equation}\label{eq:valid}
+ \forall\sigma\in\Lin(tn)\ \exists\eta\in\Lin(H):
+ \quad \eta|_T=\sigma\ \land\ \operatorname{Exec}(\eta).
+\end{equation}
+In words: \emph{every} permitted primitive sequence must admit \emph{some} legal placement of the method checks and markers. Their placement may differ between sequences. This is stronger than the usual HTN requirement that an executable linearization exists~\cite{geier}. A total order simply leaves one sequence to check.
+
+
+\section{Internal checks and symbolic configurations}
+The symbolic phase consumes the verified certificate; it does not search for a
+decomposition or repeat structural matching. Its remaining obligations are
+state-dependent action and method conditions, and the goal.
+
+At each primitive boundary, perform every enabled, true auxiliary event in
+topological order. This greedy placement decides the existential question
+in~\eqref{eq:valid}. An effectless event that is already enabled and true can be
+moved earlier without changing the world, preventing another event, or violating
+an incoming edge. Conversely, each greedy execution is a legal placement.
+Induction over the primitive sequence shows that greedy placement succeeds
+whenever any placement succeeds. One topological pass per boundary suffices:
+within that pass only predecessor-completion bits can change.
+
+Bell folds facts that no submitted action can write to their initial values.
+It removes auxiliary events whose conditions simplify to $\top$, projecting
+paths through removed events onto retained endpoints. Completion markers and
+trivial checks disappear while their dependencies remain. Empty methods with
+nontrivial guards retain their checks; true empty methods still transmit order.
+
+A configuration $z=(s,d,c)$ contains the world state, one done bit $d_a$ per
+primitive occurrence, and one bit $c_j$ per retained method check. A true $c_j$
+remembers a successful check even if its condition is now false. The world and
+primitive done bits alone would lose this history.
+
+Let $h_j$ be the conjunction of retained predecessor-completion bits of check
+$j$, and $\psi_j$ its condition. The check's local update is
+\begin{equation}\label{eq:check}
+ c'_j=c_j\lor(h_j\land\psi_j(s)).
+\end{equation}
+Other variables are unchanged. Applying these updates in topological order
+defines deterministic saturation $\operatorname{Sat}$. On sets, this denotes
+the image under that function.
+
+\section{Exact layered reachability}
+Let $n=|T|$. Separate the scheduler's submitted-order enablement $E_a$ from an
+action's execution requirements $X_a$:
+\begin{align}
+ E_a(z)&=\neg d_a\land\bigwedge_{p\prec a}d_p,\label{eq:enabled}\\
+ X_a(z)&=\pre(a)(s)\land h_a(z),\label{eq:executable}
+\end{align}
+where $h_a$ requires its retained hierarchy predecessors. Every $E_a$ choice
+must succeed. Silently pruning a choice when $X_a$ is false would lose the
+universal validity requirement.
+
+Frontier $R_k$ represents the saturated configurations reached after successful
+prefixes of $k$ primitive occurrences. Initially,
+\[
+ R_0=\operatorname{Sat}(\{(s_I,\mathbf{0},\mathbf{0})\}).
+\]
+For each occurrence $a$, reject if
+\begin{equation}\label{eq:bad}
+ R_k\land E_a\land\neg X_a\ne\bot.
+\end{equation}
+Otherwise apply~\eqref{eq:transition}, set $d_a$ true, preserve other bits,
+and take the union of all action images:
+\begin{equation}\label{eq:layer}
+ R_{k+1}=\operatorname{Sat}\left(\bigvee_{a\in T}
+ \operatorname{Img}_a(R_k\land E_a\land X_a)\right).
+\end{equation}
+Formulas denote sets, conjunction is intersection, and disjunction is union.
+After $n$ layers require
+\begin{equation}\label{eq:final}
+ R_n\land\neg\left(g\land\bigwedge_j c_j\right)=\bot.
+\end{equation}
+This also checks methods with no primitive descendants. All primitive
+occurrences are complete by the layer rank.
+
+\begin{algorithm}[H]
+\caption{Universal execution validation}
+\small
+\begin{algorithmic}[1]
+\State $R_0\gets\operatorname{Sat}(\{(s_I,\mathbf0,\mathbf0)\})$
+\For{$k=0,\ldots,n-1$}
+  \For{each primitive occurrence $a$}
+    \If{$R_k\land E_a\land\neg X_a\ne\bot$}
+      \State reconstruct a failing prefix; \Return $\Invalid$
+    \EndIf
+  \EndFor
+  \State compute $R_{k+1}$ by~\eqref{eq:layer}
+\EndFor
+\If{the final failure set in~\eqref{eq:final} is nonempty}
+  \State reconstruct a failing sequence; \Return $\Invalid$
+\EndIf
+\State \Return $\Valid$
+\end{algorithmic}
+\end{algorithm}
+
+\section{BDD background and implementation}
+A reduced ordered binary decision diagram (ROBDD) represents a Boolean function
+as a DAG. Each node tests a variable; equal subfunctions share nodes and redundant
+tests disappear. For a fixed variable order the representation is
+canonical~\cite{bryant}. Shared structure can encode many configurations
+compactly, but there is no polynomial-size guarantee.
+
+Symbolic model checking performs reachability through Boolean operations on
+these sets~\cite{burch}. For a full transition relation $T_a(z,z')$, the image is
+\[
+ \operatorname{Img}_a(R)(z')=\exists z\,[R(z)\land T_a(z,z')].
+\]
+Renaming $z'$ to $z$ allows the next step. BDD conjunction and disjunction
+implement intersection and union. A set is empty exactly when its BDD is the
+false terminal.
+
+For each world fact $f$, Bell compiles the simultaneous update
+\[
+ f'=B^+_{a,f}\lor(f\land\neg B^-_{a,f}),
+\]
+where $B^+_{a,f}$ and $B^-_{a,f}$ are the disjunctions of guards adding and
+deleting $f$. All guards refer to the old state.
+
+Bell uses current/next variable pairs and a \emph{partitioned} relation:
+one equality factor per changed variable. Conjunction and existential
+abstraction are fused. Each old changed variable is eliminated after its last
+use. Unchanged variables keep their current names, avoiding explicit frame
+equations; only temporary next-state variables are renamed. The same machinery
+implements the local check updates in~\eqref{eq:check}.
+
+Three choices reduce unnecessary work: apply method checks to reachable sets
+instead of substituting the entire hierarchy into every action; intersect each
+failure condition with a frontier instead of building a global formula over
+arbitrary histories; and reuse unaffected BDD subgraphs during substitution.
+The manager uses unique nodes, memoized operations, explicit traversal stacks
+and mark/sweep collection. It currently has a fixed variable order, no dynamic
+reordering, and retains frontiers for witnesses. These are performance
+limitations, not restrictions on the supported Boolean semantics.
+
+\section{Correctness, termination and counterexamples}
+\textbf{Invariant.}
+Until a failure is found, $R_k$ is exactly the set of canonical, greedily
+saturated configurations of all successful primitive prefixes of length $k$.
+Initial saturation gives the base case. In the step, $E_a$ selects precisely the
+next occurrences allowed by the submitted order. Equation~\eqref{eq:bad}
+detects any permitted choice missing a condition or required check.
+Equation~\eqref{eq:layer} includes every successful extension, with its exact
+simultaneous update and saturation.
+
+Prefixes merged into the same $(s,d,c)$ have identical possible continuations:
+remaining order choices depend on $d$, world conditions on $s$, and method-check
+history on $c$. Merging therefore loses no relevant distinction. The invariant,
+greedy-placement argument and final test establish that acceptance is equivalent
+to~\eqref{eq:valid} after structural verification.
+
+Every primitive transition increases the number of true $d$ bits by one.
+Thus $n$ layers cover all full linearizations. This is an exact rank bound,
+not bounded model checking with an arbitrary horizon. Finite BDD operations
+terminate for finite grounded inputs and a finite certificate. There is no
+search-work cutoff. BDD size and running time can still be exponential;
+resource exhaustion or an externally killed process produces no validity verdict.
+
+For a failure, choose a satisfying assignment of the bad set and trace it
+backwards through check and primitive updates, intersecting with stored earlier
+frontiers. Reverse the recovered primitive sequence and replay it concretely
+against the original, uncontracted hierarchy. Diagnostics name source occurrences
+and the failing action, method check or goal. Auxiliary steps never contribute
+to plan length, cost or makespan.
+
+\textbf{Complexity.}
+Universal validation is coNP-complete for explicitly grounded propositional
+inputs with a supplied finite certificate. For hardness, give each variable
+$x_i$ two unordered unconditional occurrences setting it true and false.
+Order all of them before a final action requiring $\neg\varphi$, for CNF formula
+$\varphi$. The last setter determines each value, so every assignment occurs.
+All linearizations execute exactly when $\varphi$ is unsatisfiable. For membership,
+a bad primitive linearization is a polynomial-size witness: concrete simulation
+and greedy check placement take polynomial time in the grounded input. This
+claim does not bound the expansion of succinct lifted quantifiers. BDD sharing
+improves many instances without removing this worst case.
+
+\section{Optional proofs and observable outcomes}
+The \texttt{symbolic} backend runs exact reachability. The default \texttt{auto}
+backend can first settle a restricted case using the literal modal truth criterion
+(MTC), replay a total order directly, or attempt a sufficient generalized modal proof. An unresolved supported
+case proceeds to symbolic reachability. There is no recursive splitting of
+unordered action pairs.
+
+The generalized proof is incomplete. Suppose two unordered actions each add $p$
+when $\neg p$ and add $q$ when $p$. Starting with neither fact, both orders
+establish $q$, but neither named occurrence is its guaranteed producer. Symbolic
+reachability handles this order-dependent support directly. An unsuccessful
+modal proof is therefore not evidence of invalidity. The explicit \texttt{mtc}
+backend reports \texttt{unsupported} outside its restricted literal fragment.
+
+Bell distinguishes invalid plans from malformed input, unsupported language,
+representation limits and profile rejection. Eligibility policies are separate
+from the Boolean execution semantics. Tests compare BDD operations, explicit
+prefixes, exhaustive small linearizations and method-check insertions.
+A public IPC 2023 Snake certificate also has independent action-state replay
+and a deliberately disabled conditional effect. These are implementation checks,
+not a machine-checked proof or official competition certification.
+
+\begin{thebibliography}{5}
+\small\setlength{\itemsep}{1pt}
+\bibitem{geier} T.~Geier and P.~Bercher.
+\href{https://bercher.net/publications/2011/Geier2011TIHTNDecidability.pdf}{On the decidability of HTN planning with task insertion}.
+\emph{IJCAI}, pp.~1955--1961, 2011.
+\bibitem{behnke} G.~Behnke, D.~H\"oller, and S.~Biundo.
+\href{https://doi.org/10.1609/icaps.v27i1.13811}{This is a solution! (... But is it though?) -- Verifying solutions of hierarchical planning problems}.
+\emph{ICAPS}, pp.~20--28, 2017.
+\bibitem{hddl} D.~H\"oller, G.~Behnke, P.~Bercher, S.~Biundo, H.~Fiorino, D.~Pellier, and R.~Alford.
+\href{https://bercher.net/publications/2020/Hoeller2020HDDL.pdf}{HDDL: An extension to PDDL for expressing hierarchical planning problems}.
+\emph{AAAI}, pp.~9883--9891, 2020.
+\bibitem{bryant} R.~E.~Bryant.
+\href{https://doi.org/10.1109/TC.1986.1676819}{Graph-based algorithms for Boolean function manipulation}.
+\emph{IEEE Transactions on Computers}, 35(8):677--691, 1986.
+\bibitem{burch} J.~R.~Burch, E.~M.~Clarke, K.~L.~McMillan, D.~L.~Dill, and L.~J.~Hwang.
+\href{https://doi.org/10.1016/0890-5401(92)90017-A}{Symbolic model checking: $10^{20}$ states and beyond}.
+\emph{Information and Computation}, 98(2):142--170, 1992.
+\end{thebibliography}
+
+\appendix
+\section{Software licence}
+Bell's original code is Copyright 2026 Harrison Oates and licensed under the
+Apache License, Version 2.0. The repository's \texttt{LICENSE} contains the full
+terms; \texttt{NOTICE} and source headers apply the notice to Bell. Bundled IPC
+2023 Snake files retain their separate MIT licence and attribution.
+
+Licensed under the Apache License, Version 2.0 (the \textquotedblleft License\textquotedblright);
+you may not use this file except in compliance with the License. You may obtain
+a copy at \url{https://www.apache.org/licenses/LICENSE-2.0}.
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an \textquotedblleft AS IS\textquotedblright{}
+BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and limitations
+under the License.
+\end{document}
