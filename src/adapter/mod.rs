@@ -1,37 +1,12 @@
 mod panda;
 mod source;
 
-use crate::{Diagnostic, Options, Status};
+use crate::{Diagnostic, Options, Status, work::Work};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
-use std::time::Duration;
 
 type Result<T> = std::result::Result<T, String>;
-
-struct Budget {
-    inner: crate::budget::Budget,
-    failure: Option<Diagnostic>,
-}
-
-impl Budget {
-    fn new(limit: u64, timeout: Option<Duration>) -> Self {
-        Self {
-            inner: crate::budget::Budget::new(limit, timeout),
-            failure: None,
-        }
-    }
-    fn tick(&mut self) -> Result<()> {
-        self.charge(1)
-    }
-    fn charge(&mut self, amount: u64) -> Result<()> {
-        self.inner.charge(amount).map_err(|error| {
-            let message = error.to_string();
-            self.failure = Some(error);
-            message
-        })
-    }
-}
 
 #[derive(Clone, Debug)]
 struct Call {
@@ -95,7 +70,7 @@ struct Tree {
 }
 
 impl Tree {
-    fn parse(text: &str, budget: &mut Budget) -> Result<Self> {
+    fn parse(text: &str, work: &mut Work) -> Result<Self> {
         fn id(word: &str) -> Result<u64> {
             word.parse::<u64>()
                 .map_err(|_| "invalid PANDA occurrence ID".into())
@@ -127,7 +102,7 @@ impl Tree {
         let mut ended = false;
         let mut root_seen = false;
         for line in text.lines().map(str::trim) {
-            budget.tick()?;
+            work.tick();
             if line == "==>" {
                 if started {
                     return Err("multiple PANDA plan blocks".into());
@@ -199,7 +174,7 @@ impl Tree {
         if !started || !ended || !root_seen {
             return Err("incomplete PANDA plan block (expected ==>, root, and <==)".into());
         }
-        tree.traversal(budget)?;
+        tree.traversal(work)?;
         Ok(tree)
     }
 
@@ -209,12 +184,12 @@ impl Tree {
         Ok(id)
     }
 
-    fn traversal(&self, budget: &mut Budget) -> Result<Vec<u64>> {
+    fn traversal(&self, work: &mut Work) -> Result<Vec<u64>> {
         let mut pending = self.roots.clone();
         let mut seen = BTreeSet::new();
         let mut order = vec![];
         while let Some(id) = pending.pop() {
-            budget.tick()?;
+            work.tick();
             if !seen.insert(id) {
                 return Err("shared or cyclic solution occurrence".into());
             }
@@ -228,14 +203,14 @@ impl Tree {
         Ok(order)
     }
 
-    fn positions(&mut self, budget: &mut Budget) -> Result<()> {
+    fn positions(&mut self, work: &mut Work) -> Result<()> {
         let positions: BTreeMap<_, _> = self
             .actions
             .iter()
             .enumerate()
             .map(|(i, &id)| (id, i))
             .collect();
-        for id in self.traversal(budget)?.into_iter().rev() {
+        for id in self.traversal(work)?.into_iter().rev() {
             let node = &self.nodes[&id];
             let position = positions.get(&id).copied().unwrap_or_else(|| {
                 node.children
@@ -249,7 +224,7 @@ impl Tree {
         Ok(())
     }
 
-    fn splice(&mut self, id: u64, replacement: &[u64], budget: &mut Budget) -> Result<()> {
+    fn splice(&mut self, id: u64, replacement: &[u64], work: &mut Work) -> Result<()> {
         fn replace(ids: &mut Vec<u64>, id: u64, replacement: &[u64]) {
             if let Some(index) = ids.iter().position(|&old| old == id) {
                 ids.splice(index..=index, replacement.iter().copied());
@@ -258,7 +233,7 @@ impl Tree {
         replace(&mut self.roots, id, replacement);
         replace(&mut self.actions, id, replacement);
         for node in self.nodes.values_mut() {
-            budget.tick()?;
+            work.tick();
             replace(&mut node.children, id, replacement);
         }
         self.nodes.remove(&id);
@@ -309,11 +284,11 @@ impl Reconstruction {
         Ok(map)
     }
 
-    fn restore(&self, tree: &mut Tree, budget: &mut Budget) -> Result<()> {
-        tree.positions(budget)?;
+    fn restore(&self, tree: &mut Tree, work: &mut Work) -> Result<()> {
+        tree.positions(work)?;
         let mut replacements: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         let mut retained = BTreeMap::new();
-        for id in tree.traversal(budget)?.into_iter().rev() {
+        for id in tree.traversal(work)?.into_iter().rev() {
             let node = &tree.nodes[&id];
             if node.call.name == "__noop" {
                 if node.method.is_some() || !node.call.args.is_empty() {
@@ -408,24 +383,23 @@ pub fn from_panda(
             ));
         }
     }
-    let mut budget = Budget::new(options.max_work, options.timeout);
+    let mut work = Work::default();
     let result = (|| {
         let reconstruction = source_map.map(Reconstruction::parse).transpose()?;
         if let Some(map) = &reconstruction
-            && (map.domain != domain || map.problem != problem)
+            && (!map.domain.eq_ignore_ascii_case(domain)
+                || !map.problem.eq_ignore_ascii_case(problem))
         {
             return Err("source map does not match the supplied domain/problem".into());
         }
-        reconstruct(domain, problem, plan, reconstruction.as_ref(), &mut budget)
+        reconstruct(domain, problem, plan, reconstruction.as_ref(), &mut work)
     })();
     match result {
         Ok(text) => Ok(AdaptedPlan {
             text,
-            work: budget.inner.used,
+            work: work.used,
         }),
-        Err(message) => Err(budget
-            .failure
-            .unwrap_or_else(|| Diagnostic::input("panda_adapter", message))),
+        Err(message) => Err(Diagnostic::input("panda_adapter", message)),
     }
 }
 
@@ -434,17 +408,17 @@ fn reconstruct(
     problem: &str,
     plan: &str,
     reconstruction: Option<&Reconstruction>,
-    budget: &mut Budget,
+    work: &mut Work,
 ) -> Result<String> {
-    let source = source::Source::parse(domain, problem, budget)?;
-    let mut tree = Tree::parse(plan, budget)?;
+    let source = source::Source::parse(domain, problem, work)?;
+    let mut tree = Tree::parse(plan, work)?;
     if let Some(map) = reconstruction {
-        map.restore(&mut tree, budget)?;
+        map.restore(&mut tree, work)?;
     } else {
-        panda::restore(&mut tree, budget)?;
+        panda::restore(&mut tree, work)?;
     }
-    tree.traversal(budget)?;
-    let (root_arguments, methods) = source.bind(&tree, budget)?;
+    tree.traversal(work)?;
+    let (root_arguments, methods) = source.bind(&tree, work)?;
     let mut text = source.header();
     writeln!(
         text,
@@ -524,14 +498,14 @@ mod tests {
     #[test]
     fn compressed_hierarchy_repeated_actions_and_empty_method_keep_identity() {
         let mut tree = tree();
-        let mut budget = Budget::new(1000, None);
-        panda::restore(&mut tree, &mut budget).unwrap();
+        let mut work = Work::default();
+        panda::restore(&mut tree, &mut work).unwrap();
         assert_eq!(tree.roots, [6]);
         assert_eq!(tree.actions, [2, 4]);
         assert_eq!(tree.nodes[&6].children, [2, 3, 4]);
         assert!(tree.nodes[&3].children.is_empty());
-        let source = source::Source::parse(DOMAIN, PROBLEM, &mut budget).unwrap();
-        let (root, methods) = source.bind(&tree, &mut budget).unwrap();
+        let source = source::Source::parse(DOMAIN, PROBLEM, &mut work).unwrap();
+        let (root, methods) = source.bind(&tree, &mut work).unwrap();
         assert_eq!(root, ["a"]);
         assert_eq!(methods[&6].args, ["b", "a"]);
         assert!(methods[&3].args.is_empty());
@@ -562,11 +536,11 @@ mod tests {
         tree.next_id = 9;
         tree.roots.insert(0, 8);
         tree.actions.insert(0, 8);
-        let mut budget = Budget::new(1000, None);
-        panda::restore(&mut tree, &mut budget).unwrap();
-        let (_, methods) = source::Source::parse(&domain, &problem, &mut budget)
+        let mut work = Work::default();
+        panda::restore(&mut tree, &mut work).unwrap();
+        let (_, methods) = source::Source::parse(&domain, &problem, &mut work)
             .unwrap()
-            .bind(&tree, &mut budget)
+            .bind(&tree, &mut work)
             .unwrap();
         assert_eq!(methods[&9].args, ["b", "a"]);
     }
@@ -599,33 +573,30 @@ mod tests {
                 ":ordered-subtasks (and (enable b) (root ?r))",
             )
             .replace("(:init (ready b))", "(:init)");
-        let mut budget = Budget::new(1000, None);
-        panda::restore(&mut tree, &mut budget).unwrap();
+        let mut work = Work::default();
+        panda::restore(&mut tree, &mut work).unwrap();
         assert_eq!(tree.nodes[&9].position, 1);
-        let (_, methods) = source::Source::parse(&domain, &problem, &mut budget)
+        let (_, methods) = source::Source::parse(&domain, &problem, &mut work)
             .unwrap()
-            .bind(&tree, &mut budget)
+            .bind(&tree, &mut work)
             .unwrap();
         assert_eq!(methods[&9].args, ["b", "a"]);
     }
 
     #[test]
-    fn false_guard_and_bounded_reconstruction_fail() {
+    fn reconstruction_continues_past_the_former_cutoff_and_checks_false_guards() {
         let mut tree = tree();
-        assert!(
-            panda::restore(&mut tree, &mut Budget::new(1, None))
-                .unwrap_err()
-                .contains("limit")
-        );
-        let mut tree = self::tree();
-        panda::restore(&mut tree, &mut Budget::new(1000, None)).unwrap();
+        let mut work = Work::default();
+        work.charge(10_000_000);
+        panda::restore(&mut tree, &mut work).unwrap();
         let problem = PROBLEM.replace("(ready b)", "");
         assert!(
-            source::Source::parse(DOMAIN, &problem, &mut Budget::new(1000, None))
+            source::Source::parse(DOMAIN, &problem, &mut work)
                 .unwrap()
-                .bind(&tree, &mut Budget::new(1000, None))
+                .bind(&tree, &mut work)
                 .is_err()
         );
+        assert!(work.used > 10_000_000);
     }
 
     #[test]
@@ -633,7 +604,7 @@ mod tests {
         for method in ["<bad>", "<m;root[a];m;0;-1>", "<m;root[a];m;0;0,-1,-2,-3>"] {
             let mut tree = tree();
             tree.nodes.get_mut(&0).unwrap().method = Some(method.into());
-            assert!(panda::restore(&mut tree, &mut Budget::new(1000, None)).is_err());
+            assert!(panda::restore(&mut tree, &mut Work::default()).is_err());
         }
     }
 
@@ -656,13 +627,12 @@ mod tests {
         tree.nodes.get_mut(&3).unwrap().call.name = "mf_empty".into();
         tree.nodes.get_mut(&3).unwrap().method = Some("mf_nothing".into());
         let map = Reconstruction::parse(&map.to_string()).unwrap();
-        map.restore(&mut tree, &mut Budget::new(1000, None))
-            .unwrap();
+        map.restore(&mut tree, &mut Work::default()).unwrap();
         assert_eq!(tree.nodes[&0].children, [2, 3, 4]);
         assert_eq!(tree.actions, [2, 4]);
-        let (_, methods) = source::Source::parse(DOMAIN, PROBLEM, &mut Budget::new(1000, None))
+        let (_, methods) = source::Source::parse(DOMAIN, PROBLEM, &mut Work::default())
             .unwrap()
-            .bind(&tree, &mut Budget::new(1000, None))
+            .bind(&tree, &mut Work::default())
             .unwrap();
         assert_eq!(methods[&0].args, ["b", "a"]);
     }

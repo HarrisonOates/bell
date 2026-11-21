@@ -1,8 +1,8 @@
 use crate::{
-    budget::Budget,
     order::Order,
     plan::Call,
     report::{Diagnostic, Location, Result, Status},
+    work::Work,
 };
 use hddl_analyzer::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,30 +21,144 @@ pub(crate) struct Literal {
     pub positive: bool,
 }
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Condition {
-    pub literals: Vec<Literal>,
-    pub impossible: bool,
+pub(crate) enum Condition {
+    #[default]
+    True,
+    False,
+    Literal(Literal),
+    And(Vec<Condition>),
+    Or(Vec<Condition>),
 }
 impl Condition {
-    pub fn holds(&self, state: &BTreeSet<Atom>) -> bool {
-        !self.impossible
-            && self
-                .literals
-                .iter()
-                .all(|l| state.contains(&l.atom) == l.positive)
+    fn constant(value: bool) -> Self {
+        if value { Self::True } else { Self::False }
     }
+
+    // Keep a formula tree in negation normal form; distributing into DNF can
+    // multiply its size exponentially before execution checking even starts.
+    fn junction(all: bool, parts: Vec<Self>) -> Self {
+        let mut terms = vec![];
+        for part in parts {
+            match part {
+                Self::False if all => return Self::False,
+                Self::True if !all => return Self::True,
+                Self::True | Self::False => (),
+                Self::And(children) if all => terms.extend(children),
+                Self::Or(children) if !all => terms.extend(children),
+                other => terms.push(other),
+            }
+        }
+        match terms.len() {
+            0 => Self::constant(all),
+            1 => terms.pop().unwrap(),
+            _ if all => Self::And(terms),
+            _ => Self::Or(terms),
+        }
+    }
+
+    pub fn holds(&self, state: &BTreeSet<Atom>, work: &mut Work) -> Result<bool> {
+        work.tick();
+        match self {
+            Self::True => Ok(true),
+            Self::False => Ok(false),
+            Self::Literal(l) => Ok(state.contains(&l.atom) == l.positive),
+            Self::And(parts) | Self::Or(parts) => {
+                let all = matches!(self, Self::And(_));
+                for part in parts {
+                    if part.holds(state, work)? != all {
+                        return Ok(!all);
+                    }
+                }
+                Ok(all)
+            }
+        }
+    }
+
+    pub fn conjunction<'a>(&'a self, work: &mut Work) -> Result<Option<Vec<&'a Literal>>> {
+        work.tick();
+        match self {
+            Self::True | Self::False => Ok(Some(vec![])),
+            Self::Literal(l) => Ok(Some(vec![l])),
+            Self::Or(_) => Ok(None),
+            Self::And(parts) => {
+                let mut literals = vec![];
+                for part in parts {
+                    let Some(inner) = part.conjunction(work)? else {
+                        return Ok(None);
+                    };
+                    literals.extend(inner);
+                }
+                Ok(Some(literals))
+            }
+        }
+    }
+
+    // None means that execution may change this formula's truth. A false
+    // static disjunct alone cannot make the whole condition false.
+    pub fn static_value(
+        &self,
+        state: &BTreeSet<Atom>,
+        changed: &BTreeSet<Atom>,
+        work: &mut Work,
+    ) -> Result<Option<bool>> {
+        work.tick();
+        match self {
+            Self::True => Ok(Some(true)),
+            Self::False => Ok(Some(false)),
+            Self::Literal(l) => {
+                Ok((!changed.contains(&l.atom)).then(|| state.contains(&l.atom) == l.positive))
+            }
+            Self::And(parts) | Self::Or(parts) => {
+                let all = matches!(self, Self::And(_));
+                let mut dynamic = false;
+                for part in parts {
+                    match part.static_value(state, changed, work)? {
+                        Some(value) if value != all => return Ok(Some(!all)),
+                        None => dynamic = true,
+                        _ => (),
+                    }
+                }
+                Ok((!dynamic).then_some(all))
+            }
+        }
+    }
+}
+#[derive(Clone, Debug)]
+pub(crate) struct ConditionalEffect {
+    pub condition: Condition,
+    pub add: BTreeSet<Atom>,
+    pub delete: BTreeSet<Atom>,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct GroundAction {
     pub condition: Condition,
     pub add: BTreeSet<Atom>,
     pub delete: BTreeSet<Atom>,
+    pub conditional: Vec<ConditionalEffect>,
     pub cost: u128,
 }
 impl GroundAction {
-    pub fn apply(&self, state: &mut BTreeSet<Atom>) {
-        state.retain(|a| !self.delete.contains(a));
-        state.extend(self.add.iter().cloned());
+    pub fn apply(&self, state: &mut BTreeSet<Atom>, work: &mut Work) -> Result<()> {
+        work.charge((self.add.len() + self.delete.len() + state.len()) as u64);
+        if self.conditional.is_empty() {
+            state.retain(|a| !self.delete.contains(a));
+            state.extend(self.add.iter().cloned());
+            return Ok(());
+        }
+        let mut add = self.add.clone();
+        let mut delete = self.delete.clone();
+        // Every guard reads the same pre-action state, including guards whose
+        // atoms are changed by unconditional or other conditional effects.
+        for effect in &self.conditional {
+            if effect.condition.holds(state, work)? {
+                work.charge((effect.add.len() + effect.delete.len()) as u64);
+                add.extend(effect.add.iter().cloned());
+                delete.extend(effect.delete.iter().cloned());
+            }
+        }
+        state.retain(|a| !delete.contains(a));
+        state.extend(add);
+        Ok(())
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -87,7 +201,7 @@ impl<'a> Model<'a> {
         domain: &'a DomainAST<'a>,
         problem: &'a ProblemAST<'a>,
         negative_init: &BTreeSet<(u32, u32)>,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<Self> {
         if domain.name != problem.domain_name {
             return Err(Diagnostic::input(
@@ -113,7 +227,7 @@ impl<'a> Model<'a> {
             objective: Objective::Length,
         };
         for t in domain.types.iter().flatten() {
-            budget.tick()?;
+            work.tick();
             if t.name == "object"
                 || m.parents
                     .insert(t.name.into(), t.symbol_type.unwrap_or("object").into())
@@ -134,7 +248,7 @@ impl<'a> Model<'a> {
             let mut seen = BTreeSet::new();
             let mut current = t.as_str();
             while current != "object" {
-                budget.tick()?;
+                work.tick();
                 if !seen.insert(current) {
                     return Err(Diagnostic::input(
                         "type_cycle",
@@ -149,7 +263,7 @@ impl<'a> Model<'a> {
             ("problem", problem.objects.as_slice()),
         ] {
             for object in symbols {
-                budget.tick()?;
+                work.tick();
                 m.known_type(object.symbol_type.unwrap_or("object"))?;
                 if object.name.starts_with('?') || m.objects.contains_key(object.name) {
                     return Err(m.error(
@@ -285,14 +399,14 @@ impl<'a> Model<'a> {
         }
         let mut numeric_actions = 0;
         for a in &domain.actions {
-            budget.tick()?;
+            work.tick();
             let scope = m.scope(&a.parameters, "domain")?;
             let check = (|| {
                 if let Some(c) = &a.preconditions {
-                    m.check_condition(c, &scope, "domain", budget)?;
+                    m.check_condition(c, &scope, "domain", work)?;
                 }
                 let count = if let Some(e) = &a.effects {
-                    m.check_effect(e, &scope, true, budget)?
+                    m.check_effect(e, &scope, true, work)?
                 } else {
                     0
                 };
@@ -324,7 +438,7 @@ impl<'a> Model<'a> {
             ));
         }
         for method in &domain.methods {
-            budget.tick()?;
+            work.tick();
             let scope = m.scope(&method.params, "domain")?;
             let parameters = m.tasks.get(method.task.name).ok_or_else(|| {
                 m.error(
@@ -344,16 +458,16 @@ impl<'a> Model<'a> {
             }
             m.check_terms(parameters, &method.task_terms, &scope, "domain")?;
             if let Some(c) = &method.precondition {
-                m.check_condition(c, &scope, "domain", budget)?;
+                m.check_condition(c, &scope, "domain", work)?;
             }
-            m.check_network(&method.tn, &scope, "domain", budget)?;
+            m.check_network(&method.tn, &scope, "domain", work)?;
         }
         if let Some(root) = &problem.init_tn {
             let scope = m.scope(root.parameters.as_deref().unwrap_or_default(), "problem")?;
-            m.check_network(&root.tn, &scope, "problem", budget)?;
+            m.check_network(&root.tn, &scope, "problem", work)?;
         }
         if let Some(goal) = &problem.goal {
-            m.check_condition(goal, &Scope::new(), "problem", budget)?;
+            m.check_condition(goal, &Scope::new(), "problem", work)?;
         }
         let mut negative = BTreeSet::new();
         for p in &problem.init_state {
@@ -537,36 +651,34 @@ impl<'a> Model<'a> {
         c: &Precondition<'_>,
         scope: &Scope,
         file: &str,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<()> {
-        budget.tick()?;
+        work.tick();
         match c {
             Precondition::Empty => Ok(()),
             Precondition::Atom(p) => self.check_predicate(p, scope, file),
-            Precondition::And(cs) => {
+            Precondition::And(cs) | Precondition::Or(cs) => {
                 for c in cs {
-                    self.check_condition(c, scope, file, budget)?;
+                    self.check_condition(c, scope, file, work)?;
                 }
                 Ok(())
             }
-            Precondition::Not(c)
-                if matches!(**c, Precondition::Atom(_) | Precondition::Equals(_, _)) =>
-            {
-                self.check_condition(c, scope, file, budget)
+            Precondition::Not(c) => self.check_condition(c, scope, file, work),
+            Precondition::Imply(a, b) => {
+                self.check_condition(a, scope, file, work)?;
+                self.check_condition(b, scope, file, work)
             }
             Precondition::Equals(a, b) => {
                 self.term_type(a, scope, file)?;
                 self.term_type(b, scope, file)?;
                 Ok(())
             }
-            Precondition::ForAll(vars, c) => {
+            Precondition::ForAll(vars, c) | Precondition::Exists(vars, c) => {
                 let mut inner = scope.clone();
                 inner.extend(self.scope(vars, file)?);
-                self.check_condition(c, &inner, file, budget)
+                self.check_condition(c, &inner, file, work)
             }
-            _ => Err(Diagnostic::unsupported(
-                "only conjunctive literals, equality, and universal conditions are supported",
-            )),
+            _ => Err(Diagnostic::unsupported("non-HDDL condition connective")),
         }
     }
     fn check_effect(
@@ -574,9 +686,9 @@ impl<'a> Model<'a> {
         effect: &Effect<'_>,
         scope: &Scope,
         top: bool,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<usize> {
-        budget.tick()?;
+        work.tick();
         match effect {
             Effect::Empty => Ok(0),
             Effect::Atom(p) => {
@@ -584,7 +696,7 @@ impl<'a> Model<'a> {
                 Ok(0)
             }
             Effect::Not(e) if matches!(**e, Effect::Atom(_)) => {
-                self.check_effect(e, scope, false, budget)
+                self.check_effect(e, scope, false, work)
             }
             Effect::And(es) => {
                 let mut count = 0;
@@ -594,7 +706,7 @@ impl<'a> Model<'a> {
                         e,
                         scope,
                         top && matches!(**e, Effect::Numeric(_, _, _)),
-                        budget,
+                        work,
                     )?;
                 }
                 Ok(count)
@@ -602,7 +714,12 @@ impl<'a> Model<'a> {
             Effect::ForAll(vars, e) => {
                 let mut inner = scope.clone();
                 inner.extend(self.scope(vars, "domain")?);
-                self.check_effect(e, &inner, false, budget)
+                self.check_effect(e, &inner, false, work)
+            }
+            Effect::Imply(guard, body) => {
+                self.check_condition(guard, scope, "domain", work)?;
+                self.check_conditional_body(body, scope, work)?;
+                Ok(0)
             }
             Effect::Numeric(AssignmentOperator::Increase, f, n)
                 if top && f.name == "total-cost" && f.variables.is_empty() =>
@@ -629,8 +746,40 @@ impl<'a> Model<'a> {
                 "only one top-level increase of total-cost is permitted",
             )),
             _ => Err(Diagnostic::unsupported(
-                "only unconditional add/delete effects are supported",
+                "only deterministic add/delete, conditional, and universal effects are supported",
             )),
+        }
+    }
+
+    fn check_conditional_body(
+        &self,
+        effect: &Effect<'_>,
+        scope: &Scope,
+        work: &mut Work,
+    ) -> Result<()> {
+        work.tick();
+        let literal = |effect: &Effect<'_>, work: &mut Work| match effect {
+            Effect::Atom(_) => self.check_effect(effect, scope, false, work).map(|_| ()),
+            Effect::Not(inner) if matches!(**inner, Effect::Atom(_)) => {
+                self.check_effect(effect, scope, false, work).map(|_| ())
+            }
+            Effect::Numeric(_, _, _) => Err(Diagnostic::input(
+                "cost_effect",
+                "cost effects cannot occur inside when",
+            )),
+            _ => Err(Diagnostic::input(
+                "conditional_effect_body",
+                "a when body must be a literal or a conjunction of literals",
+            )),
+        };
+        match effect {
+            Effect::And(parts) => {
+                for part in parts {
+                    literal(part, work)?;
+                }
+                Ok(())
+            }
+            _ => literal(effect, work),
         }
     }
 
@@ -639,10 +788,10 @@ impl<'a> Model<'a> {
         tn: &HTN<'_>,
         scope: &Scope,
         file: &str,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<()> {
         for task in &tn.subtasks {
-            budget.tick()?;
+            work.tick();
             let parameters = self.tasks.get(task.task.name).ok_or_else(|| {
                 self.error(
                     "unknown_task",
@@ -660,7 +809,7 @@ impl<'a> Model<'a> {
             self.term_type(a, scope, file)?;
             self.term_type(b, scope, file)?;
         }
-        self.network_order(tn, budget).map_err(|mut e| {
+        self.network_order(tn, work).map_err(|mut e| {
             if e.status == Status::InvalidPlan {
                 e.status = Status::InputError;
             }
@@ -668,7 +817,7 @@ impl<'a> Model<'a> {
         })?;
         Ok(())
     }
-    pub fn network_order(&self, tn: &HTN<'_>, budget: &mut Budget) -> Result<Order> {
+    pub fn network_order(&self, tn: &HTN<'_>, work: &mut Work) -> Result<Order> {
         let mut ids = BTreeMap::new();
         for (i, s) in tn.subtasks.iter().enumerate() {
             if let Some(id) = &s.id
@@ -699,7 +848,7 @@ impl<'a> Model<'a> {
                 })
                 .collect::<Result<Vec<_>>>()?,
         };
-        Order::new(tn.subtasks.len(), edges, budget)
+        Order::new(tn.subtasks.len(), edges, work)
     }
     pub fn bind(&self, parameters: &[Symbol<'_>], args: &[String]) -> Result<Bindings> {
         if parameters.len() != args.len() {
@@ -782,14 +931,14 @@ impl<'a> Model<'a> {
         &self,
         vars: &[Symbol<'_>],
         env: &Bindings,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<Vec<Bindings>> {
         let mut all = vec![env.clone()];
         for v in vars {
             let mut next = vec![];
             for binding in &all {
                 for (id, kind) in self.object_types.iter().enumerate() {
-                    budget.tick()?;
+                    work.tick();
                     if self.subtype(kind, v.symbol_type.unwrap_or("object")) {
                         let mut binding = binding.clone();
                         binding.insert(v.name.into(), id);
@@ -805,57 +954,68 @@ impl<'a> Model<'a> {
         &self,
         c: Option<&Precondition<'_>>,
         env: &Bindings,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<Condition> {
-        let mut result = Condition::default();
-        if let Some(c) = c {
-            self.literals(c, env, false, &mut result, budget)?;
+        match c {
+            Some(c) => self.formula(c, env, false, work),
+            None => Ok(Condition::True),
         }
-        Ok(result)
     }
-    fn literals(
+    fn formula(
         &self,
         c: &Precondition<'_>,
         env: &Bindings,
         negative: bool,
-        out: &mut Condition,
-        budget: &mut Budget,
-    ) -> Result<()> {
-        budget.tick()?;
+        work: &mut Work,
+    ) -> Result<Condition> {
+        work.tick();
         match c {
-            Precondition::Empty => (),
-            Precondition::Atom(p) => out.literals.push(Literal {
+            Precondition::Empty => Ok(Condition::constant(!negative)),
+            Precondition::Atom(p) => Ok(Condition::Literal(Literal {
                 atom: self.atom(p, env)?,
                 positive: !negative,
-            }),
-            Precondition::Equals(a, b) => {
-                out.impossible |= (self.resolve(a, env)? == self.resolve(b, env)?) == negative
-            }
-            Precondition::Not(c) => self.literals(c, env, !negative, out, budget)?,
-            Precondition::And(cs) => {
+            })),
+            Precondition::Equals(a, b) => Ok(Condition::constant(
+                (self.resolve(a, env)? == self.resolve(b, env)?) != negative,
+            )),
+            Precondition::Not(c) => self.formula(c, env, !negative, work),
+            Precondition::And(cs) | Precondition::Or(cs) => {
+                let all = matches!(c, Precondition::And(_)) != negative;
+                let mut parts = vec![];
                 for c in cs {
-                    self.literals(c, env, false, out, budget)?;
+                    parts.push(self.formula(c, env, negative, work)?);
                 }
+                Ok(Condition::junction(all, parts))
             }
-            Precondition::ForAll(vars, c) => {
-                for env in self.assignments(vars, env, budget)? {
-                    self.literals(c, &env, false, out, budget)?;
+            Precondition::Imply(a, b) => Ok(Condition::junction(
+                negative,
+                vec![
+                    self.formula(a, env, !negative, work)?,
+                    self.formula(b, env, negative, work)?,
+                ],
+            )),
+            Precondition::ForAll(vars, body) | Precondition::Exists(vars, body) => {
+                let all = matches!(c, Precondition::ForAll(_, _)) != negative;
+                let mut parts = vec![];
+                for env in self.assignments(vars, env, work)? {
+                    parts.push(self.formula(body, &env, negative, work)?);
                 }
+                Ok(Condition::junction(all, parts))
             }
-            _ => return Err(Diagnostic::unsupported("non-conjunctive condition")),
+            _ => Err(Diagnostic::unsupported("non-HDDL condition connective")),
         }
-        Ok(())
     }
-    pub fn ground_action(&self, call: &Call, budget: &mut Budget) -> Result<GroundAction> {
+    pub fn ground_action(&self, call: &Call, work: &mut Work) -> Result<GroundAction> {
         let &i = self.actions.get(call.name.as_str()).ok_or_else(|| {
             Diagnostic::invalid("unknown_action", format!("{} is not an action", call.name))
         })?;
         let schema = &self.domain.actions[i];
         let env = self.bind(&schema.parameters, &call.args)?;
         let mut action = GroundAction {
-            condition: self.condition(schema.preconditions.as_ref(), &env, budget)?,
+            condition: self.condition(schema.preconditions.as_ref(), &env, work)?,
             add: BTreeSet::new(),
             delete: BTreeSet::new(),
+            conditional: vec![],
             cost: if self.objective == Objective::Cost {
                 0
             } else {
@@ -863,7 +1023,7 @@ impl<'a> Model<'a> {
             },
         };
         if let Some(e) = &schema.effects {
-            self.effects(e, &env, &mut action, budget)?;
+            self.effects(e, &env, &mut action, work)?;
         }
         // Simultaneous STRIPS effects: add wins over delete.
         action.delete.retain(|a| !action.add.contains(a));
@@ -874,9 +1034,9 @@ impl<'a> Model<'a> {
         e: &Effect<'_>,
         env: &Bindings,
         out: &mut GroundAction,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<()> {
-        budget.tick()?;
+        work.tick();
         match e {
             Effect::Empty => (),
             Effect::Atom(p) => {
@@ -889,12 +1049,28 @@ impl<'a> Model<'a> {
             }
             Effect::And(es) => {
                 for e in es {
-                    self.effects(e, env, out, budget)?;
+                    self.effects(e, env, out, work)?;
                 }
             }
             Effect::ForAll(vars, e) => {
-                for env in self.assignments(vars, env, budget)? {
-                    self.effects(e, &env, out, budget)?;
+                for env in self.assignments(vars, env, work)? {
+                    self.effects(e, &env, out, work)?;
+                }
+            }
+            Effect::Imply(guard, body) => {
+                let mut effect = ConditionalEffect {
+                    condition: self.condition(Some(guard), env, work)?,
+                    add: BTreeSet::new(),
+                    delete: BTreeSet::new(),
+                };
+                self.effect_literals(body, env, &mut effect, work)?;
+                match effect.condition {
+                    Condition::False => (),
+                    Condition::True => {
+                        out.add.extend(effect.add);
+                        out.delete.extend(effect.delete);
+                    }
+                    _ => out.conditional.push(effect),
                 }
             }
             Effect::Numeric(_, _, n) => {
@@ -922,7 +1098,39 @@ impl<'a> Model<'a> {
             }
             _ => {
                 return Err(Diagnostic::unsupported(
-                    "conditional or non-deterministic effect",
+                    "non-deterministic or non-HDDL effect",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn effect_literals(
+        &self,
+        effect: &Effect<'_>,
+        env: &Bindings,
+        out: &mut ConditionalEffect,
+        work: &mut Work,
+    ) -> Result<()> {
+        work.tick();
+        match effect {
+            Effect::Atom(p) => {
+                out.add.insert(self.atom(p, env)?);
+            }
+            Effect::Not(inner) => {
+                if let Effect::Atom(p) = &**inner {
+                    out.delete.insert(self.atom(p, env)?);
+                }
+            }
+            Effect::And(parts) => {
+                for part in parts {
+                    self.effect_literals(part, env, out, work)?;
+                }
+            }
+            _ => {
+                return Err(Diagnostic::input(
+                    "conditional_effect_body",
+                    "invalid when body",
                 ));
             }
         }

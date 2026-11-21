@@ -1,6 +1,6 @@
 use crate::{
-    budget::Budget,
     report::{Diagnostic, Result},
+    work::Work,
 };
 use std::collections::{BTreeSet, VecDeque};
 
@@ -15,7 +15,7 @@ impl Order {
     pub fn new(
         n: usize,
         edges: impl IntoIterator<Item = (usize, usize)>,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<Self> {
         let words = n.div_ceil(64);
         let cells = n.checked_mul(words).ok_or_else(|| {
@@ -25,11 +25,11 @@ impl Order {
                 "ordering graph is too large",
             )
         })?;
-        budget.charge(cells as u64 + n as u64)?;
+        work.charge(cells as u64 + n as u64);
         let mut successors = vec![BTreeSet::new(); n];
         let mut predecessors = vec![BTreeSet::new(); n];
         for (a, b) in edges {
-            budget.tick()?;
+            work.tick();
             if a >= n || b >= n {
                 return Err(Diagnostic::input(
                     "ordering_reference",
@@ -60,7 +60,7 @@ impl Order {
         let mut reach = vec![vec![0; words]; n];
         for &a in topological.iter().rev() {
             for &b in &successors[a] {
-                budget.charge(words as u64)?;
+                work.charge(words as u64);
                 for w in 0..words {
                     reach[a][w] |= reach[b][w];
                 }

@@ -1,11 +1,10 @@
-use bell::{Diagnostic, Options, Profile, Report, Status, validate};
+use bell::{Diagnostic, ExecutionBackend, Options, Profile, Report, Status, validate};
 use clap::{Parser, ValueEnum};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
     process::ExitCode,
-    time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -19,7 +18,7 @@ enum InputFormat {
     name = "bell",
     version,
     about = "Validate IPC HTN plans against domain and problem files",
-    after_help = "Supports conjunctive conditions and unconditional effects. Disjunctions, conditional effects, existential conditions, and (either ...) types are currently unsupported.\nCost literals must be integers in 0..=9223372036854775807; sums use exact 128-bit arithmetic."
+    after_help = "Supports Boolean and quantified conditions, and unconditional, conditional, and universal effects. Partial-order execution checking may be exponential and runs to completion without work or time cutoffs. Union (either ...) types and nondeterministic effects are unsupported.\nCost literals must be integers in 0..=9223372036854775807; sums use exact 128-bit arithmetic."
 )]
 struct Args {
     domain: PathBuf,
@@ -43,10 +42,9 @@ struct Args {
     json: bool,
     #[arg(long,default_value="ipc2027",value_parser=["ipc2027","hddl-1.1"])]
     profile: String,
-    #[arg(long,default_value_t=10_000_000,value_parser=clap::value_parser!(u64).range(1..))]
-    max_work: u64,
-    #[arg(long,value_name="SECONDS",value_parser=clap::value_parser!(u64).range(1..))]
-    timeout: Option<u64>,
+    #[arg(long, default_value = "auto", value_parser = ["auto", "symbolic", "mtc"],
+        help = "Execution backend: modal fast paths plus exact reachability, exact reachability alone, or restricted literal MTC")]
+    execution_backend: String,
     #[arg(long, default_value_t = 16_777_216, value_name = "BYTES")]
     max_input_bytes: usize,
 }
@@ -133,7 +131,6 @@ fn publish(path: &Path, text: &str, inputs: &[&Path]) -> Result<(), Diagnostic> 
 }
 
 fn run(args: &Args, options: &Options) -> Result<Report, Diagnostic> {
-    let started = Instant::now();
     let domain = read(&args.domain, options.max_input_bytes)?;
     let problem = read(&args.problem, options.max_input_bytes)?;
     let input = read(&args.plan, options.max_input_bytes)?;
@@ -158,13 +155,8 @@ fn run(args: &Args, options: &Options) -> Result<Report, Diagnostic> {
     } else {
         input
     };
-    let mut remaining = options.clone();
-    remaining.max_work = remaining.max_work.saturating_sub(work);
-    remaining.timeout = remaining
-        .timeout
-        .map(|t| t.saturating_sub(started.elapsed()));
-    let mut report = validate(&domain, &problem, &plan, &remaining);
-    report.work += work;
+    let mut report = validate(&domain, &problem, &plan, options);
+    report.work = report.work.saturating_add(work);
     if args.input_format == InputFormat::Panda {
         for diagnostic in &mut report.diagnostics {
             if let Some(location) = &mut diagnostic.location
@@ -198,9 +190,12 @@ fn main() -> ExitCode {
         } else {
             Profile::Hddl11
         },
-        max_work: args.max_work,
-        timeout: args.timeout.map(Duration::from_secs),
         max_input_bytes: args.max_input_bytes,
+        execution_backend: match args.execution_backend.as_str() {
+            "symbolic" => ExecutionBackend::Symbolic,
+            "mtc" => ExecutionBackend::Mtc,
+            _ => ExecutionBackend::Auto,
+        },
     };
     let mut report = match run(&args, &options) {
         Ok(report) => report,

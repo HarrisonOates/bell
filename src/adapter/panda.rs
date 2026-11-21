@@ -1,4 +1,4 @@
-use super::{Budget, Call, Node, Result, Tree};
+use super::{Call, Node, Result, Tree, Work};
 use std::collections::BTreeMap;
 
 fn compressed_method(tree: &mut Tree, id: u64) -> Result<()> {
@@ -84,7 +84,7 @@ fn compressed_method(tree: &mut Tree, id: u64) -> Result<()> {
     Ok(())
 }
 
-fn compressed_action(tree: &mut Tree, id: u64, budget: &mut Budget) -> Result<()> {
+fn compressed_action(tree: &mut Tree, id: u64, work: &mut Work) -> Result<()> {
     let node = tree.nodes[&id].clone();
     if node.method.is_some() {
         return Err("compressed primitive has a method".into());
@@ -102,7 +102,7 @@ fn compressed_action(tree: &mut Tree, id: u64, budget: &mut Budget) -> Result<()
     let mut offset: usize = 0;
     let mut replacement = vec![];
     for pair in parts[1..].as_chunks::<2>().0 {
-        budget.tick()?;
+        work.tick();
         let arity: usize = pair[1]
             .parse()
             .map_err(|_| "invalid compressed action arity")?;
@@ -134,21 +134,21 @@ fn compressed_action(tree: &mut Tree, id: u64, budget: &mut Budget) -> Result<()
     if offset != node.call.args.len() {
         return Err("extra compressed action arguments".into());
     }
-    tree.splice(id, &replacement, budget)
+    tree.splice(id, &replacement, work)
 }
 
-pub(super) fn restore(tree: &mut Tree, budget: &mut Budget) -> Result<()> {
+pub(super) fn restore(tree: &mut Tree, work: &mut Work) -> Result<()> {
     // Undo PANDA's encodings in compiler order before erasing auxiliary occurrences.
     loop {
-        budget.tick()?;
-        budget.charge(tree.nodes.len() as u64)?;
+        work.tick();
+        work.charge(tree.nodes.len() as u64);
         let artificial = tree.nodes.iter().find(|(_, n)| {
             n.method.as_deref().is_some_and(|m| m.starts_with("_!"))
                 || n.call.name.starts_with("_!")
         });
         if let Some((&id, node)) = artificial {
             let children = node.children.clone();
-            tree.splice(id, &children, budget)?;
+            tree.splice(id, &children, work)?;
             continue;
         }
         if let Some((&id, _)) = tree
@@ -156,7 +156,7 @@ pub(super) fn restore(tree: &mut Tree, budget: &mut Budget) -> Result<()> {
             .iter()
             .find(|(_, n)| n.call.name.starts_with('%'))
         {
-            compressed_action(tree, id, budget)?;
+            compressed_action(tree, id, work)?;
             continue;
         }
         if let Some((&id, _)) = tree
@@ -169,12 +169,12 @@ pub(super) fn restore(tree: &mut Tree, budget: &mut Budget) -> Result<()> {
         }
         break;
     }
-    tree.positions(budget)?;
-    let order = tree.traversal(budget)?;
+    tree.positions(work)?;
+    let order = tree.traversal(work)?;
     let mut replacements: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
     let mut retained = BTreeMap::new();
     for id in order.into_iter().rev() {
-        budget.tick()?;
+        work.tick();
         let node = &tree.nodes[&id];
         let children = node
             .children

@@ -75,25 +75,49 @@ fn malformed_raw_graphs_are_rejected_before_recovery() {
 }
 
 #[test]
-fn reconstruction_has_work_time_and_input_limits() {
-    for options in [
-        Options {
-            max_work: 1,
-            ..Options::default()
+fn reconstruction_checks_input_size() {
+    let options = Options {
+        max_input_bytes: 1,
+        ..Options::default()
+    };
+    let error = from_panda(DOMAIN, PROBLEM, RAW, None, &options)
+        .err()
+        .unwrap();
+    assert_eq!(error.status, Status::LimitExceeded, "{error:?}");
+}
+
+#[test]
+fn reconstruction_maps_match_source_case_insensitively_but_reject_different_inputs() {
+    let domain = "(define (domain d) (:requirements :hierarchy) (:predicates (p))
+      (:task t :parameters ())
+      (:method m :parameters () :task (t) :subtasks (a))
+      (:action a :parameters () :effect ()))";
+    let problem = "(define (problem p) (:domain d) (:htn :subtasks (t)) (:init))";
+    let raw = "==>\n1 compiled_a[]\nroot 0\n0 compiled_t[] -> compiled_m 1\n<==";
+    let map = serde_json::json!({
+        "version": 1, "domain": domain, "problem": problem,
+        "tasks": {
+            "compiled_t": {"name": "t", "arity": 0, "primitive": false},
+            "compiled_a": {"name": "a", "arity": 0, "primitive": true}
         },
-        Options {
-            timeout: Some(std::time::Duration::ZERO),
-            ..Options::default()
-        },
-        Options {
-            max_input_bytes: 1,
-            ..Options::default()
-        },
+        "methods": {"compiled_m": {"name": "m", "children": [0], "body_len": 1}}
+    })
+    .to_string();
+    let options = Options::default();
+    let upper_domain = domain.to_ascii_uppercase();
+    let upper_problem = problem.to_ascii_uppercase();
+    let adapted = from_panda(&upper_domain, &upper_problem, raw, Some(&map), &options).unwrap();
+    let report = validate(&upper_domain, &upper_problem, &adapted.text, &options);
+    assert_eq!(report.status, Status::Valid, "{report:?}");
+    for (domain, problem) in [
+        (domain.replace(":effect ()", ":effect (p)"), problem.into()),
+        (domain.into(), problem.replace("(:init)", "(:init (p))")),
     ] {
-        let error = from_panda(DOMAIN, PROBLEM, RAW, None, &options)
+        let error = from_panda(&domain, &problem, raw, Some(&map), &options)
             .err()
             .unwrap();
-        assert_eq!(error.status, Status::LimitExceeded, "{error:?}");
+        assert_eq!(error.code, "panda_adapter");
+        assert!(error.message.contains("does not match"));
     }
 }
 
@@ -141,12 +165,14 @@ fn cli_only_publishes_validated_plans_and_preserves_inputs() {
             .output()
             .unwrap()
     };
-    let result = run("out", &["--max-work", "1"]);
-    assert_eq!(result.status.code(), Some(4));
+    std::fs::write(directory.join("raw"), RAW.replace("root 0", "root 99")).unwrap();
+    let result = run("out", &[]);
+    assert!(!result.status.success());
     assert_eq!(
         std::fs::read_to_string(directory.join("out")).unwrap(),
         "previous"
     );
+    std::fs::write(directory.join("raw"), RAW).unwrap();
     let result = run("d", &[]);
     assert_eq!(result.status.code(), Some(2));
     assert_eq!(

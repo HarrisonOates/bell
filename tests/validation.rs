@@ -350,9 +350,10 @@ fn costs_are_exact_integers_and_definedness_matters() {
 fn unsupported_features_are_not_silently_ignored() {
     let p = "(define (problem p) (:domain d) (:init))";
     for effect in [
-        "(when (p) (q))",
         "(or (p) (q))",
-        "(forall (?x - object) (when (p) (q)))",
+        "(oneof (p) (q))",
+        "(exists (?x - object) (q))",
+        "(forall (?x - object) (or (p) (q)))",
     ] {
         let d = format!(
             "(define (domain d) (:predicates (p) (q)) (:action unused :parameters () :effect {effect}))"
@@ -362,7 +363,7 @@ fn unsupported_features_are_not_silently_ignored() {
     let d = "(define (domain d) (:predicates (p) (q)))";
     status(
         d,
-        &p.replace("(:init)", "(:init) (:goal (or (p) (q)))"),
+        &p.replace("(:init)", "(:init) (:goal (oneof (p) (q)))"),
         EMPTY,
         Status::Unsupported,
     );
@@ -403,23 +404,7 @@ fn malformed_reports_and_limits_do_not_validate() {
         Status::UnsolvabilityReport,
     );
     let options = Options {
-        max_work: 1,
-        ..Options::default()
-    };
-    assert_eq!(
-        validate(DOMAIN, PROBLEM, PLAN, &options).status,
-        Status::LimitExceeded
-    );
-    let options = Options {
         max_input_bytes: 1,
-        ..Options::default()
-    };
-    assert_eq!(
-        validate(DOMAIN, PROBLEM, PLAN, &options).status,
-        Status::LimitExceeded
-    );
-    let options = Options {
-        timeout: Some(std::time::Duration::ZERO),
         ..Options::default()
     };
     assert_eq!(

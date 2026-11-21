@@ -1,6 +1,6 @@
 use crate::{
-    budget::Budget,
     report::{Diagnostic, Location, Result, Status},
+    work::Work,
 };
 use hddl_analyzer::{
     LexicalAnalyzer, LexicalErrorType, NumberType, PunctuationType, Token, TokenPosition,
@@ -52,8 +52,8 @@ impl Node {
 
 // HDDL-Parser supplies tokenization. This small reader also enforces a single
 // complete document and bounded nesting before calling its domain/problem parser.
-pub(crate) fn document(bytes: &Vec<u8>, file: &str, budget: &mut Budget) -> Result<Node> {
-    budget.charge(bytes.len() as u64 / 64 + 1)?;
+pub(crate) fn document(bytes: &Vec<u8>, file: &str, work: &mut Work) -> Result<Node> {
+    work.charge(bytes.len() as u64 / 64 + 1);
     let source = std::str::from_utf8(bytes)
         .map_err(|_| Diagnostic::input("encoding", "input must be UTF-8"))?;
     let lines: Vec<_> = source.lines().collect();
@@ -70,7 +70,7 @@ pub(crate) fn document(bytes: &Vec<u8>, file: &str, budget: &mut Budget) -> Resu
     let mut stack: Vec<Node> = vec![];
     let mut root = None;
     loop {
-        budget.tick()?;
+        work.tick();
         let token = match lexer.get_token() {
             Ok(t) => t,
             Err(e)
@@ -228,10 +228,7 @@ fn check_keys(node: &Node) -> Result<()> {
 }
 
 fn supported_syntax(node: &Node) -> Result<()> {
-    if matches!(
-        node.head(),
-        "or" | "oneof" | "imply" | "when" | "exists" | "probabilistic" | "either"
-    ) {
+    if matches!(node.head(), "oneof" | "probabilistic" | "either") {
         return Err(
             Diagnostic::unsupported(format!("{} is not supported", node.head()))
                 .at(node.location.clone()),
@@ -242,6 +239,130 @@ fn supported_syntax(node: &Node) -> Result<()> {
     }
     for child in &node.children {
         supported_syntax(child)?;
+    }
+    Ok(())
+}
+
+// The parser uses Empty both for () and for a connective's closing token.
+// Spell empty conditions as (and) so nested truth constants cannot terminate
+// an and/or early. Keep an insertion map for diagnostics and negative init.
+pub(crate) struct ParserSource {
+    pub bytes: Vec<u8>,
+    insertions: Vec<(usize, Location)>,
+}
+
+impl ParserSource {
+    pub fn new(root: &Node, source: &[u8], work: &mut Work) -> Result<Self> {
+        let mut insertions = vec![];
+        for block in root.children.iter().skip(2) {
+            match block.head() {
+                ":goal" => {
+                    if let Some(condition) = block.children.get(1) {
+                        condition_syntax(condition, &mut insertions)?;
+                    }
+                }
+                ":action" | ":method" => {
+                    for pair in block.children.windows(2) {
+                        match pair[0].text.as_deref() {
+                            Some(":precondition") => condition_syntax(&pair[1], &mut insertions)?,
+                            Some(":effect") => effect_syntax(&pair[1], &mut insertions)?,
+                            _ => (),
+                        }
+                    }
+                }
+                _ => (),
+            }
+        }
+        insertions.sort_by_key(|(offset, _)| *offset);
+        work.charge((source.len() / 64 + insertions.len() * 3 + 1) as u64);
+        let mut bytes = Vec::with_capacity(source.len() + insertions.len() * 3);
+        let mut start = 0;
+        for (offset, _) in &insertions {
+            bytes.extend_from_slice(&source[start..*offset]);
+            bytes.extend_from_slice(b"and");
+            start = *offset;
+        }
+        bytes.extend_from_slice(&source[start..]);
+        Ok(Self { bytes, insertions })
+    }
+
+    pub fn shifted_position(&self, (line, column): (u32, u32)) -> (u32, u32) {
+        let shift = self
+            .insertions
+            .iter()
+            .filter(|(_, at)| at.line == line + 1 && at.column <= column)
+            .count() as u32
+            * 3;
+        (line, column + shift)
+    }
+
+    pub fn restore_location(&self, location: &mut Location) {
+        let mut shift = 0;
+        for (_, at) in &self.insertions {
+            if at.line == location.line && at.column + shift < location.column {
+                shift += (location.column - (at.column + shift + 1)).min(3);
+            }
+        }
+        location.column -= shift;
+    }
+
+    pub fn restore_error(&self, mut error: Diagnostic) -> Diagnostic {
+        if let Some(location) = &mut error.location {
+            self.restore_location(location);
+            if error.code == "parse"
+                && error.message.starts_with('[')
+                && let Some((_, rest)) = error.message.split_once("]:")
+            {
+                error.message = format!("[{}:{}]:{rest}", location.line, location.column);
+            }
+        }
+        error
+    }
+}
+
+fn condition_syntax(node: &Node, insertions: &mut Vec<(usize, Location)>) -> Result<()> {
+    if node.text.is_none() && node.children.is_empty() {
+        insertions.push((node.span.start + 1, node.location.clone()));
+    }
+    match node.head() {
+        "when" => return Err(node.error("conditions use imply; when is an effect")),
+        "and" | "or" | "not" | "imply" => {
+            for child in node.children.iter().skip(1) {
+                condition_syntax(child, insertions)?;
+            }
+        }
+        "forall" | "exists" => {
+            if let Some(body) = node.children.get(2) {
+                condition_syntax(body, insertions)?;
+            }
+        }
+        _ => (),
+    }
+    Ok(())
+}
+
+fn effect_syntax(node: &Node, insertions: &mut Vec<(usize, Location)>) -> Result<()> {
+    match node.head() {
+        "imply" => return Err(node.error("conditional effects use when; imply is a condition")),
+        "when" => {
+            if let Some(guard) = node.children.get(1) {
+                condition_syntax(guard, insertions)?;
+            }
+            if let Some(body) = node.children.get(2) {
+                effect_syntax(body, insertions)?;
+            }
+        }
+        "forall" => {
+            if let Some(body) = node.children.get(2) {
+                effect_syntax(body, insertions)?;
+            }
+        }
+        "and" | "not" => {
+            for child in node.children.iter().skip(1) {
+                effect_syntax(child, insertions)?;
+            }
+        }
+        _ => (),
     }
     Ok(())
 }

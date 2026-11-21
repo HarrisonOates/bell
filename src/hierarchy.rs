@@ -1,9 +1,9 @@
 use crate::{
-    budget::Budget,
     model::{Bindings, Condition, GroundAction, Model},
     order::Order,
     plan::{Occurrence, Plan},
     report::{Diagnostic, Result},
+    work::Work,
 };
 use hddl_analyzer::HTN;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -85,7 +85,7 @@ impl Builder<'_, '_> {
         children: &[Occurrence],
         env: &Bindings,
         parent: Option<(usize, usize)>,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<()> {
         self.model.constraints(tn, env)?;
         if tn.subtasks.len() != children.len() {
@@ -100,7 +100,7 @@ impl Builder<'_, '_> {
         }
         let mut endpoints = vec![];
         for (schema, occurrence) in tn.subtasks.iter().zip(children) {
-            budget.tick()?;
+            work.tick();
             if self.model.call(schema.task.name, &schema.terms, env)? != occurrence.call {
                 return Err(Diagnostic::invalid(
                     "subtask_mismatch",
@@ -116,7 +116,7 @@ impl Builder<'_, '_> {
             }
             endpoints.push(pair);
         }
-        let local = self.model.network_order(tn, budget)?;
+        let local = self.model.network_order(tn, work)?;
         for (a, successors) in local.successors.iter().enumerate() {
             for &b in successors {
                 self.edges.push((endpoints[a].1, endpoints[b].0));
@@ -126,12 +126,12 @@ impl Builder<'_, '_> {
     }
 }
 
-pub(crate) fn build(model: &Model<'_>, plan: &Plan, budget: &mut Budget) -> Result<Certificate> {
+pub(crate) fn build(model: &Model<'_>, plan: &Plan, work: &mut Work) -> Result<Certificate> {
     let mut actions = vec![];
     let mut action_ids = BTreeMap::new();
     let mut events = vec![];
     for occurrence in &plan.actions {
-        budget.tick()?;
+        work.tick();
         let i = actions.len();
         if action_ids.insert(occurrence.id.clone(), i).is_some() {
             return Err(
@@ -141,7 +141,7 @@ pub(crate) fn build(model: &Model<'_>, plan: &Plan, budget: &mut Budget) -> Resu
             );
         }
         let action = model
-            .ground_action(&occurrence.call, budget)
+            .ground_action(&occurrence.call, work)
             .map_err(|e| e.task(&occurrence.id).at(occurrence.location.clone()))?;
         events.push(Event {
             id: occurrence.id.clone(),
@@ -164,7 +164,7 @@ pub(crate) fn build(model: &Model<'_>, plan: &Plan, budget: &mut Budget) -> Resu
             Ok((lookup(a)?, lookup(b)?))
         })
         .collect::<Result<Vec<_>>>()?;
-    let order = Order::new(actions.len(), plan_edges, budget)?;
+    let order = Order::new(actions.len(), plan_edges, work)?;
     let mut builder = Builder {
         model,
         plan,
@@ -180,7 +180,7 @@ pub(crate) fn build(model: &Model<'_>, plan: &Plan, budget: &mut Budget) -> Resu
             root.parameters.as_deref().unwrap_or_default(),
             &plan.parameters,
         )?;
-        builder.network(&root.tn, &plan.roots, &env, None, budget)?;
+        builder.network(&root.tn, &plan.roots, &env, None, work)?;
     } else {
         if !plan.decompositions.is_empty() || !plan.parameters.is_empty() {
             return Err(Diagnostic::invalid(
@@ -200,7 +200,7 @@ pub(crate) fn build(model: &Model<'_>, plan: &Plan, budget: &mut Budget) -> Resu
         }
     }
     while let Some(occurrence) = builder.queue.pop_front() {
-        budget.tick()?;
+        work.tick();
         let check = (|| {
             let parameters = model
                 .tasks
@@ -252,9 +252,9 @@ pub(crate) fn build(model: &Model<'_>, plan: &Plan, budget: &mut Budget) -> Resu
             }
             let pair = builder.endpoints[&occurrence.id];
             builder.events[pair.0].condition =
-                model.condition(method.precondition.as_ref(), &env, budget)?;
+                model.condition(method.precondition.as_ref(), &env, work)?;
             builder.expanded.insert(occurrence.id.clone());
-            builder.network(&method.tn, &entry.children, &env, Some(pair), budget)
+            builder.network(&method.tn, &entry.children, &env, Some(pair), work)
         })();
         check.map_err(|e| e.task(&occurrence.id).at(occurrence.location.clone()))?;
     }
@@ -274,10 +274,10 @@ pub(crate) fn build(model: &Model<'_>, plan: &Plan, budget: &mut Budget) -> Resu
             .at(occurrence.location.clone()));
         }
     }
-    let hierarchy = Order::new(builder.events.len(), builder.edges, budget)?;
+    let hierarchy = Order::new(builder.events.len(), builder.edges, work)?;
     for (a, first) in plan.actions.iter().enumerate() {
         for (b, second) in plan.actions.iter().enumerate() {
-            budget.tick()?;
+            work.tick();
             if hierarchy.before(a, b) && !order.before(a, b) {
                 return Err(Diagnostic::invalid(
                     "missing_hierarchy_order",

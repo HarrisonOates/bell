@@ -1,4 +1,4 @@
-use super::{Budget, Call, Result, Tree};
+use super::{Call, Result, Tree, Work};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug)]
@@ -72,7 +72,7 @@ fn name(text: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse(text: &str, budget: &mut Budget) -> Result<Expr> {
+fn parse(text: &str, work: &mut Work) -> Result<Expr> {
     let mut stack: Vec<Vec<Expr>> = vec![vec![]];
     let text = text
         .lines()
@@ -84,7 +84,7 @@ fn parse(text: &str, budget: &mut Budget) -> Result<Expr> {
         .replace(')', " ) ")
         .to_ascii_lowercase();
     for token in text.split_whitespace() {
-        budget.tick()?;
+        work.tick();
         match token {
             "(" => {
                 if stack.len() > 256 {
@@ -213,9 +213,9 @@ pub(super) struct Source {
 }
 
 impl Source {
-    pub(super) fn parse(domain: &str, problem: &str, budget: &mut Budget) -> Result<Self> {
-        let domain = parse(domain, budget)?;
-        let problem = parse(problem, budget)?;
+    pub(super) fn parse(domain: &str, problem: &str, work: &mut Work) -> Result<Self> {
+        let domain = parse(domain, work)?;
+        let problem = parse(problem, work)?;
         let domain_name = domain.named("domain")?;
         let problem_name = problem.named("problem")?;
         if problem.named(":domain")? != domain_name {
@@ -238,7 +238,7 @@ impl Source {
                 let mut pending = vec![kind, "object".into()];
                 let mut seen = BTreeSet::new();
                 while let Some(kind) = pending.pop() {
-                    budget.tick()?;
+                    work.tick();
                     if seen.insert(kind.clone()) {
                         pending.extend(parents.get(&kind).into_iter().flatten().cloned());
                         objects.entry(kind).or_default().insert(object.clone());
@@ -266,8 +266,8 @@ impl Source {
         &self,
         params: &[(String, String)],
         fixed: &Env,
-        budget: &mut Budget,
-        mut accept: impl FnMut(&Env, &mut Budget) -> Result<bool>,
+        work: &mut Work,
+        mut accept: impl FnMut(&Env, &mut Work) -> Result<bool>,
     ) -> Result<Option<Env>> {
         let mut choices = vec![];
         for (variable, kind) in params {
@@ -287,13 +287,13 @@ impl Source {
         }
         let mut indices = vec![0; params.len()];
         loop {
-            budget.tick()?;
+            work.tick();
             let mut env = fixed.clone();
             for ((variable, _), (items, &index)) in params.iter().zip(choices.iter().zip(&indices))
             {
                 env.insert(variable.clone(), items[index].clone());
             }
-            if accept(&env, budget)? {
+            if accept(&env, work)? {
                 return Ok(Some(env));
             }
             let mut position = indices.len();
@@ -316,9 +316,9 @@ impl Source {
         expr: Option<&Expr>,
         env: &Env,
         state: &State,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<bool> {
-        budget.tick()?;
+        work.tick();
         let Some(expr) = expr else {
             return Ok(true);
         };
@@ -330,18 +330,16 @@ impl Source {
             "and" | "or" => {
                 let all = expr.head() == "and";
                 for part in &parts[1..] {
-                    if self.condition(Some(part), env, state, budget)? != all {
+                    if self.condition(Some(part), env, state, work)? != all {
                         return Ok(!all);
                     }
                 }
                 Ok(all)
             }
-            "not" if parts.len() == 2 => {
-                Ok(!self.condition(Some(&parts[1]), env, state, budget)?)
-            }
+            "not" if parts.len() == 2 => Ok(!self.condition(Some(&parts[1]), env, state, work)?),
             "imply" if parts.len() == 3 => {
-                Ok(!self.condition(Some(&parts[1]), env, state, budget)?
-                    || self.condition(Some(&parts[2]), env, state, budget)?)
+                Ok(!self.condition(Some(&parts[1]), env, state, work)?
+                    || self.condition(Some(&parts[2]), env, state, work)?)
             }
             "=" if parts.len() == 3 => {
                 Ok(resolve(parts[1].atom()?, env)? == resolve(parts[2].atom()?, env)?)
@@ -353,8 +351,8 @@ impl Source {
                 for (v, _) in &params {
                     outer.remove(v);
                 }
-                let witness = self.assignments(&params, &outer, budget, |binding, budget| {
-                    Ok(self.condition(Some(&parts[2]), binding, state, budget)? != universal)
+                let witness = self.assignments(&params, &outer, work, |binding, work| {
+                    Ok(self.condition(Some(&parts[2]), binding, state, work)? != universal)
                 })?;
                 Ok(witness.is_none() == universal)
             }
@@ -370,9 +368,9 @@ impl Source {
         state: &State,
         add: &mut State,
         delete: &mut State,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<()> {
-        budget.tick()?;
+        work.tick();
         let parts = expr.list()?;
         if parts.is_empty() {
             return Ok(());
@@ -380,15 +378,15 @@ impl Source {
         match expr.head() {
             "and" => {
                 for part in &parts[1..] {
-                    self.effects(part, env, state, add, delete, budget)?;
+                    self.effects(part, env, state, add, delete, work)?;
                 }
             }
             "not" if parts.len() == 2 => {
                 delete.insert(ground(&parts[1], env)?);
             }
             "when" if parts.len() == 3 => {
-                if self.condition(Some(&parts[1]), env, state, budget)? {
-                    self.effects(&parts[2], env, state, add, delete, budget)?;
+                if self.condition(Some(&parts[1]), env, state, work)? {
+                    self.effects(&parts[2], env, state, add, delete, work)?;
                 }
             }
             "forall" if parts.len() == 3 => {
@@ -397,8 +395,8 @@ impl Source {
                 for (v, _) in &params {
                     outer.remove(v);
                 }
-                self.assignments(&params, &outer, budget, |binding, budget| {
-                    self.effects(&parts[2], binding, state, add, delete, budget)?;
+                self.assignments(&params, &outer, work, |binding, work| {
+                    self.effects(&parts[2], binding, state, add, delete, work)?;
                     Ok(false)
                 })?;
             }
@@ -419,7 +417,7 @@ impl Source {
         children: &[u64],
         tree: &Tree,
         state: &State,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<Vec<String>> {
         let params = schema
             .field(":parameters")?
@@ -445,10 +443,10 @@ impl Source {
             return Err("undeclared source method parameter".into());
         }
         let env = self
-            .assignments(&params, &env, budget, |env, budget| {
+            .assignments(&params, &env, work, |env, work| {
                 Ok(
-                    self.condition(schema.field(":constraints")?, env, state, budget)?
-                        && self.condition(schema.field(":precondition")?, env, state, budget)?,
+                    self.condition(schema.field(":constraints")?, env, state, work)?
+                        && self.condition(schema.field(":precondition")?, env, state, work)?,
                 )
             })?
             .ok_or(
@@ -460,7 +458,7 @@ impl Source {
     pub(super) fn bind(
         &self,
         tree: &Tree,
-        budget: &mut Budget,
+        work: &mut Work,
     ) -> Result<(Vec<String>, BTreeMap<u64, Call>)> {
         let mut state = State::new();
         for init in self.problem.sections(":init")? {
@@ -474,7 +472,7 @@ impl Source {
         if roots.len() != 1 {
             return Err("HDDL output requires one source initial task network".into());
         }
-        let root_args = self.bindings(roots[0], None, &tree.roots, tree, &state, budget)?;
+        let root_args = self.bindings(roots[0], None, &tree.roots, tree, &state, work)?;
         let mut schemas = BTreeMap::new();
         for method in self.domain.sections(":method")? {
             let method_name = method.list()?.get(1).ok_or("missing method name")?.atom()?;
@@ -506,21 +504,15 @@ impl Source {
         {
             let position = action.map_or(usize::MAX, |id| tree.nodes[&id].position);
             while pending.peek().is_some_and(|&(p, _)| p <= position) {
-                budget.tick()?;
+                work.tick();
                 let (_, id) = pending.next().unwrap();
                 let node = &tree.nodes[&id];
                 let method = node.method.as_deref().unwrap();
                 let schema = schemas
                     .get(method)
                     .ok_or_else(|| format!("unknown source method {method}"))?;
-                let args = self.bindings(
-                    schema,
-                    Some(&node.call),
-                    &node.children,
-                    tree,
-                    &state,
-                    budget,
-                )?;
+                let args =
+                    self.bindings(schema, Some(&node.call), &node.children, tree, &state, work)?;
                 methods.insert(
                     id,
                     Call {
@@ -558,13 +550,13 @@ impl Source {
                     return Err("source action type mismatch".into());
                 }
             }
-            if !self.condition(schema.field(":precondition")?, &env, &state, budget)? {
+            if !self.condition(schema.field(":precondition")?, &env, &state, work)? {
                 return Err("source action is not executable".into());
             }
             let mut add = State::new();
             let mut delete = State::new();
             if let Some(effect) = schema.field(":effect")? {
-                self.effects(effect, &env, &state, &mut add, &mut delete, budget)?;
+                self.effects(effect, &env, &state, &mut add, &mut delete, work)?;
             }
             for fact in delete {
                 state.remove(&fact);
@@ -578,7 +570,7 @@ impl Source {
                 .and_then(|g| g.list().ok()?.get(1)),
             &Env::new(),
             &state,
-            budget,
+            work,
         )? {
             return Err("source goal is not satisfied".into());
         }
