@@ -1,3 +1,6 @@
+// Copyright 2026 Harrison Oates
+// SPDX-License-Identifier: Apache-2.0
+
 use bell::{ExecutionBackend, Options, Status, validate};
 
 // Public IPC 2023 Snake inputs. Generation provenance is bundled, but no

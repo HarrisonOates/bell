@@ -1,3 +1,6 @@
+// Copyright 2026 Harrison Oates
+// SPDX-License-Identifier: Apache-2.0
+
 //! Sound formula-level modal truth proofs. Failure to prove an obligation is
 //! inconclusive: execution.rs then runs exact symbolic reachability. Proof
 //! contexts contain only established facts, never assumed action preconditions

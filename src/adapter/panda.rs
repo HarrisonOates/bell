@@ -1,3 +1,6 @@
+// Copyright 2026 Harrison Oates
+// SPDX-License-Identifier: Apache-2.0
+
 use super::{Call, Node, Result, Tree, Work};
 use std::collections::BTreeMap;
 

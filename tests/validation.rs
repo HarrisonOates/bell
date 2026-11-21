@@ -1,3 +1,6 @@
+// Copyright 2026 Harrison Oates
+// SPDX-License-Identifier: Apache-2.0
+
 use bell::{Options, Profile, Report, Status, validate};
 
 fn check(d: &str, p: &str, s: &str) -> Report {

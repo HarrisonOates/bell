@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 Harrison Oates
+# SPDX-License-Identifier: Apache-2.0
+
 """Compare Bell's execution backends, keeping unsupported results explicit."""
 
 import argparse

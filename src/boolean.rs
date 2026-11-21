@@ -1,3 +1,6 @@
+// Copyright 2026 Harrison Oates
+// SPDX-License-Identifier: Apache-2.0
+
 //! Reduced ordered Boolean decision diagrams for regression and reachability.
 //! Operations use explicit stacks; large grounded formulas cannot overflow the
 //! call stack. Both retained nodes and operation-cache entries consume work.

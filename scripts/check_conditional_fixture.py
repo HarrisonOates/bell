@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 Harrison Oates
+# SPDX-License-Identifier: Apache-2.0
+
 """Check the bundled IPC 2023 Snake certificate and its conditional-effects variant.
 
 Uses only Python and Bell. The small independent interpreter checks action states

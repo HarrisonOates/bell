@@ -1,3 +1,6 @@
+// Copyright 2026 Harrison Oates
+// SPDX-License-Identifier: Apache-2.0
+
 //! Exact universal partial-order validation by layered BDD reachability.
 //!
 //! A state contains dynamic facts, action completion bits, and method-check bits.

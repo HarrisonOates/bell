@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 Harrison Oates
+# SPDX-License-Identifier: Apache-2.0
+
 """Run the standalone validation examples and check their expected diagnostics."""
 
 import argparse

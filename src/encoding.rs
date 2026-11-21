@@ -1,3 +1,6 @@
+// Copyright 2026 Harrison Oates
+// SPDX-License-Identifier: Apache-2.0
+
 //! Shared exact Boolean compilation of grounded conditions and action effects.
 use crate::{
     boolean::{Booleans, FALSE, Formula, TRUE},

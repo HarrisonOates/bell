@@ -1,3 +1,6 @@
+// Copyright 2026 Harrison Oates
+// SPDX-License-Identifier: Apache-2.0
+
 /// Informational work accounting. This counter never interrupts a check, even
 /// when its reporting range is exhausted.
 #[derive(Default)]

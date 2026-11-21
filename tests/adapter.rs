@@ -1,3 +1,6 @@
+// Copyright 2026 Harrison Oates
+// SPDX-License-Identifier: Apache-2.0
+
 use bell::{Options, Status, adapter::from_panda, validate};
 
 const DOMAIN: &str = "(define (domain d) (:requirements :hierarchy :typing :method-preconditions)
