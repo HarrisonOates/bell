@@ -1,0 +1,2 @@
+(define (problem p) (:domain d)
+  (:htn :subtasks (and (a) (b) (reset) (t))) (:init))

@@ -1,0 +1,6 @@
+(define (domain d)
+  (:requirements :hierarchy :negative-preconditions)
+  (:predicates (ready))
+  (:action set :parameters () :effect (ready))
+  (:action use :parameters () :precondition (ready))
+  (:action clear :parameters () :effect (not (ready))))

@@ -1,0 +1,6 @@
+(define (plan demo) (:domain d) (:problem p)
+  (:decomposition
+    (:root :subtasks (r (travel b)))
+    (r (travel b) :method (missing a b)
+      :subtasks (x (move a b))))
+  (:htn :ordered-tasks (x (move a b))))

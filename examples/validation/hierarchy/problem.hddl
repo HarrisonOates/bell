@@ -1,0 +1,4 @@
+(define (problem p) (:domain d)
+  (:objects a b - place)
+  (:htn :ordered-subtasks (travel b))
+  (:init (at a)) (:goal (at b)))

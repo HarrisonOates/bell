@@ -1,0 +1,3 @@
+(define (domain d) (:predicates (p) (q))
+(:action toggle :parameters () :effect (and (when (p) (and (not (p)) (q))) (when (not (p)) (p))))
+(:action noop :parameters ()))

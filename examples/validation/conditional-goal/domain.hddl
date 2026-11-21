@@ -1,0 +1,5 @@
+(define (domain d)
+  (:requirements :hierarchy :conditional-effects)
+  (:predicates (p) (q))
+  (:action set :parameters () :effect (p))
+  (:action fire :parameters () :effect (when (p) (q))))

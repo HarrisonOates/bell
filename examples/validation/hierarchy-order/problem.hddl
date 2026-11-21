@@ -1,0 +1,2 @@
+(define (problem p) (:domain d)
+  (:htn :ordered-subtasks (and (a) (empty) (b))) (:init))

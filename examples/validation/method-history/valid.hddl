@@ -1,0 +1,6 @@
+(define (plan demo) (:domain d) (:problem p)
+  (:decomposition
+    (:root :subtasks (and (a (a)) (b (b)) (r (reset)) (t (t))))
+    (t (t) :method (m) :subtasks (l (leaf))))
+  (:htn :tasks (and (a (a)) (b (b)) (r (reset)) (l (leaf)))
+    :ordering (and (< a r) (< b a) (< b r) (< r l))))

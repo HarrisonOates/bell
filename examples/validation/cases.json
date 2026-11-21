@@ -1,0 +1,207 @@
+{
+  "description": "Standalone examples extracted from Bell regression cases. Paths are relative to the repository root. Use the hddl-1.1 profile. expected_code is the symbolic diagnostic; expected_code_auto overrides it for the default modal fast path.",
+  "cases": [
+    {
+      "name": "action-order/valid",
+      "domain": "examples/validation/action-order/domain.hddl",
+      "problem": "examples/validation/action-order/problem.hddl",
+      "plan": "examples/validation/action-order/valid.hddl",
+      "expected_status": "valid",
+      "expected_code": null,
+      "explanation": "set, use, clear is executable.",
+      "source": "tests/validation.rs: mtc_requires_every_linearization_to_work"
+    },
+    {
+      "name": "action-order/missing-order",
+      "domain": "examples/validation/action-order/domain.hddl",
+      "problem": "examples/validation/action-order/problem.hddl",
+      "plan": "examples/validation/action-order/missing-order.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "action_precondition",
+      "explanation": "The submitted order permits use before set.",
+      "source": "tests/validation.rs: mtc_requires_every_linearization_to_work",
+      "expected_code_auto": "missing_support"
+    },
+    {
+      "name": "action-order/unprotected-precondition",
+      "domain": "examples/validation/action-order/domain.hddl",
+      "problem": "examples/validation/action-order/problem.hddl",
+      "plan": "examples/validation/action-order/unprotected-precondition.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "action_precondition",
+      "explanation": "set precedes use, but set, clear, use is also permitted and fails.",
+      "source": "tests/validation.rs: mtc_requires_every_linearization_to_work",
+      "expected_code_auto": "unresolved_threat"
+    },
+    {
+      "name": "action-order/cycle",
+      "domain": "examples/validation/action-order/domain.hddl",
+      "problem": "examples/validation/action-order/problem.hddl",
+      "plan": "examples/validation/action-order/cycle.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "ordering_cycle",
+      "explanation": "The submitted action order contains a cycle; this is not vacuous validity.",
+      "source": "tests/validation.rs: mtc_requires_every_linearization_to_work"
+    },
+    {
+      "name": "conditional-goal/valid",
+      "domain": "examples/validation/conditional-goal/domain.hddl",
+      "problem": "examples/validation/conditional-goal/problem.hddl",
+      "plan": "examples/validation/conditional-goal/valid.hddl",
+      "expected_status": "valid",
+      "expected_code": null,
+      "explanation": "set enables the guard before fire, so q is achieved.",
+      "source": "tests/conditions_effects.rs: conditional_effects_depend_on_the_action_order"
+    },
+    {
+      "name": "conditional-goal/bad-goal",
+      "domain": "examples/validation/conditional-goal/domain.hddl",
+      "problem": "examples/validation/conditional-goal/problem.hddl",
+      "plan": "examples/validation/conditional-goal/bad-goal.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "goal",
+      "explanation": "fire, set executes without an action failure, but the inactive conditional effect leaves q false.",
+      "source": "tests/conditions_effects.rs: conditional_effects_depend_on_the_action_order"
+    },
+    {
+      "name": "hierarchy/valid",
+      "domain": "examples/validation/hierarchy/domain.hddl",
+      "problem": "examples/validation/hierarchy/problem.hddl",
+      "plan": "examples/validation/hierarchy/valid.hddl",
+      "expected_status": "valid",
+      "expected_code": null,
+      "explanation": "The grounded route decomposes travel b into exactly the submitted move.",
+      "source": "tests/validation.rs: corrupt_hierarchies_are_rejected_with_occurrences"
+    },
+    {
+      "name": "hierarchy/unknown-method",
+      "domain": "examples/validation/hierarchy/domain.hddl",
+      "problem": "examples/validation/hierarchy/problem.hddl",
+      "plan": "examples/validation/hierarchy/unknown-method.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "unknown_method",
+      "explanation": "The certificate names a method that the domain does not declare.",
+      "source": "tests/validation.rs: corrupt_hierarchies_are_rejected_with_occurrences"
+    },
+    {
+      "name": "hierarchy/wrong-method-head",
+      "domain": "examples/validation/hierarchy/domain.hddl",
+      "problem": "examples/validation/hierarchy/problem.hddl",
+      "plan": "examples/validation/hierarchy/wrong-method-head.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "method_head",
+      "explanation": "The supplied bindings make route decompose travel a, but the parent is travel b.",
+      "source": "tests/validation.rs: corrupt_hierarchies_are_rejected_with_occurrences"
+    },
+    {
+      "name": "hierarchy/missing-decomposition",
+      "domain": "examples/validation/hierarchy/domain.hddl",
+      "problem": "examples/validation/hierarchy/problem.hddl",
+      "plan": "examples/validation/hierarchy/missing-decomposition.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "missing_decomposition",
+      "explanation": "The compound occurrence r has no expansion.",
+      "source": "tests/validation.rs: corrupt_hierarchies_are_rejected_with_occurrences"
+    },
+    {
+      "name": "hierarchy/leaf-mismatch",
+      "domain": "examples/validation/hierarchy/domain.hddl",
+      "problem": "examples/validation/hierarchy/problem.hddl",
+      "plan": "examples/validation/hierarchy/leaf-mismatch.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "leaf_mismatch",
+      "explanation": "The primitive occurrence has different arguments in the hierarchy and action network.",
+      "source": "tests/validation.rs: corrupt_hierarchies_are_rejected_with_occurrences"
+    },
+    {
+      "name": "hierarchy/orphan-action",
+      "domain": "examples/validation/hierarchy/domain.hddl",
+      "problem": "examples/validation/hierarchy/problem.hddl",
+      "plan": "examples/validation/hierarchy/orphan-action.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "orphan_action",
+      "explanation": "The extra action occurrence is not produced by the decomposition.",
+      "source": "tests/validation.rs: corrupt_hierarchies_are_rejected_with_occurrences"
+    },
+    {
+      "name": "hierarchy-order/valid",
+      "domain": "examples/validation/hierarchy-order/domain.hddl",
+      "problem": "examples/validation/hierarchy-order/problem.hddl",
+      "plan": "examples/validation/hierarchy-order/valid.hddl",
+      "expected_status": "valid",
+      "expected_code": null,
+      "explanation": "The hierarchy requires a before b, even with an empty compound task between them.",
+      "source": "tests/validation.rs: hierarchy_order_is_required_not_inserted"
+    },
+    {
+      "name": "hierarchy-order/missing-edge",
+      "domain": "examples/validation/hierarchy-order/domain.hddl",
+      "problem": "examples/validation/hierarchy-order/problem.hddl",
+      "plan": "examples/validation/hierarchy-order/missing-edge.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "missing_hierarchy_order",
+      "explanation": "Both actions are individually executable, but the submitted order omits the hierarchy-required x < y.",
+      "source": "tests/validation.rs: hierarchy_order_is_required_not_inserted"
+    },
+    {
+      "name": "method-history/no-legal-placement",
+      "domain": "examples/validation/method-history/domain.hddl",
+      "problem": "examples/validation/method-history/problem.hddl",
+      "plan": "examples/validation/method-history/no-legal-placement.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "method_precondition",
+      "explanation": "a,b,reset,leaf never makes p and q true together; b,a,reset,leaf does. Both have the same facts after reset.",
+      "source": "tests/symbolic.rs: equal_facts_and_action_sets_do_not_erase_method_check_history"
+    },
+    {
+      "name": "method-history/valid",
+      "domain": "examples/validation/method-history/domain.hddl",
+      "problem": "examples/validation/method-history/problem.hddl",
+      "plan": "examples/validation/method-history/valid.hddl",
+      "expected_status": "valid",
+      "expected_code": null,
+      "explanation": "b,a permits the method check before reset destroys its condition. The condition need not hold immediately before leaf.",
+      "source": "tests/symbolic.rs: equal_facts_and_action_sets_do_not_erase_method_check_history"
+    },
+    {
+      "name": "empty-method/valid",
+      "domain": "examples/validation/empty-method/domain.hddl",
+      "problem": "examples/validation/empty-method/valid-problem.hddl",
+      "plan": "examples/validation/empty-method/plan.hddl",
+      "expected_status": "valid",
+      "expected_code": null,
+      "explanation": "The empty method can be checked initially.",
+      "source": "tests/validation.rs: empty_methods_still_have_preconditions"
+    },
+    {
+      "name": "empty-method/false-guard",
+      "domain": "examples/validation/empty-method/domain.hddl",
+      "problem": "examples/validation/empty-method/false-guard-problem.hddl",
+      "plan": "examples/validation/empty-method/plan.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "method_precondition",
+      "explanation": "The method has no primitive descendants, but its false precondition still invalidates the certificate.",
+      "source": "tests/validation.rs: empty_methods_still_have_preconditions"
+    },
+    {
+      "name": "snake/valid",
+      "domain": "tests/fixtures/ipc2023-snake/conditional-domain.hddl",
+      "problem": "tests/fixtures/ipc2023-snake/problem.hddl",
+      "plan": "tests/fixtures/ipc2023-snake/plan.hddl",
+      "expected_status": "valid",
+      "expected_code": null,
+      "explanation": "Public IPC 2023 Snake certificate with a derived conditional-effects domain; every action state matches the original domain.",
+      "source": "tests/public_fixture.rs; tests/fixtures/ipc2023-snake/provenance.json"
+    },
+    {
+      "name": "snake/disabled-head",
+      "domain": "tests/fixtures/ipc2023-snake/disabled-head-domain.hddl",
+      "problem": "tests/fixtures/ipc2023-snake/problem.hddl",
+      "plan": "tests/fixtures/ipc2023-snake/plan.hddl",
+      "expected_status": "invalid_plan",
+      "expected_code": "action_precondition",
+      "explanation": "Negative control: disabling conditional head installation makes a later action fail; the certificate is unchanged.",
+      "source": "tests/public_fixture.rs; tests/fixtures/ipc2023-snake/provenance.json"
+    }
+  ]
+}

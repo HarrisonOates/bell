@@ -1,0 +1,4 @@
+(define (domain d)
+  (:requirements :hierarchy :method-preconditions)
+  (:predicates (p)) (:task t :parameters ())
+  (:method m :parameters () :task (t) :precondition (p) :subtasks ()))

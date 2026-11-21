@@ -1,0 +1,5 @@
+(define (plan demo)
+  (:domain d) (:problem p)
+  (:decomposition (:root :subtasks ()))
+  (:htn :tasks (and (s (set)) (u (use)) (c (clear)))
+    :ordering (and (< s u) (< u c))))

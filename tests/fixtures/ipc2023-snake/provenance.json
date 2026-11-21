@@ -1,0 +1,102 @@
+{
+  "upstream": "https://github.com/ipc2023-htn/ipc2023-domains/tree/main/total-order/Snake",
+  "instance": "pb-2slots-seed1.snake.hddl",
+  "license": "MIT; copyright 2020 Mau Magnaguagno; see LICENSE",
+  "source_files": {
+    "domain.hddl": {
+      "url": "https://github.com/ipc2023-htn/ipc2023-domains/blob/main/total-order/Snake/domain.hddl",
+      "sha256": "3fb4fa2af9176b5300482633c84317dca796cc86611ac7877fe6a889a68d088d"
+    },
+    "problem.hddl": {
+      "url": "https://github.com/ipc2023-htn/ipc2023-domains/blob/main/total-order/Snake/pb-2slots-seed1.snake.hddl",
+      "sha256": "533fddcf85fadc221473d40c2749943bdecc3799a80f9f6d30df41b2bbfedb8a"
+    },
+    "LICENSE": {
+      "url": "https://github.com/ipc2023-htn/ipc2023-domains/blob/main/total-order/Snake/MIT-LICENSE",
+      "sha256": "aa0b7bbde465b0b5f7a811d0ad00f6832b82367a22ea6c959b2a4eb2becd3dd8"
+    }
+  },
+  "certificate": {
+    "generated_by": "Bowerbird via the Malleefowl HDDL frontend, reconstructed by Bell",
+    "sha256": "82fee1fec30d2872c02f261536f5bbe337fab1e9fa978f40db2b77fe068ea6e8",
+    "actions": 17,
+    "cost": 17,
+    "optimality_claim": false
+  },
+  "tools": {
+    "malleefowl-hddl": {
+      "sha256": "4cfae51e9cca78f9e286dce9f2092d67fef3dcd0551ae87175c1880a5c0ba167"
+    },
+    "bowerbird": {
+      "sha256": "e23fc9ee9ecb30745f4d5a0ae389a40bf8bfb72edf7a80cd2b50ea41cd7a2185"
+    }
+  },
+  "commands": [
+    [
+      "malleefowl-hddl",
+      "--max-work=18446744073709551615",
+      "domain.hddl",
+      "problem.hddl",
+      "problem.sas"
+    ],
+    [
+      "bowerbird",
+      "--track",
+      "satisficing-to",
+      "--timelimit",
+      "45",
+      "--result-file",
+      "engine-result.json",
+      "--seed",
+      "42",
+      "-g",
+      "none",
+      "-H",
+      "rc(occ)",
+      "problem.sas"
+    ],
+    [
+      "bell",
+      "--input-format",
+      "panda",
+      "--source-map",
+      "problem.sas.map.json",
+      "--plan-output",
+      "plan.hddl",
+      "domain.hddl",
+      "problem.hddl",
+      "plan.raw"
+    ],
+    [
+      "malleefowl-hddl",
+      "--max-work=18446744073709551615",
+      "convert",
+      "problem.sas.map.json",
+      "plan.raw",
+      "independent.plan"
+    ]
+  ],
+  "independent_source_verifier": {
+    "status": "valid",
+    "actions": 17,
+    "cost": 17
+  },
+  "conditional_variant": {
+    "description": "Replace head deletion by quantified conditional clearing and head addition by a condition on the old head; all guards read the pre-action state.",
+    "sha256": "f78c362a5856800c53f706c359841119f55e5924bf57cf91ef7ae722403df3ed"
+  },
+  "independent_replay": {
+    "actions": 17,
+    "guards": {
+      "inactive": 816,
+      "fired": 34
+    },
+    "every_state_matches_original": true
+  },
+  "negative_control": {
+    "description": "Invert the head-installation guards, leaving the original certificate unchanged.",
+    "sha256": "04e39296aa8cde2d0dc1de881ed0d09246b5d90f1b77aa82e79b5d75ce329a50",
+    "status": "invalid_plan",
+    "code": "action_precondition"
+  }
+}

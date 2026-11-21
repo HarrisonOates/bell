@@ -1,0 +1,6 @@
+(define (domain d)
+  (:requirements :hierarchy)
+  (:predicates (p))
+  (:task empty :parameters ())
+  (:method nothing :parameters () :task (empty) :subtasks ())
+  (:action a :parameters ()) (:action b :parameters ()))
